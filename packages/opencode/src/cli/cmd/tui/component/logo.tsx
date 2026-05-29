@@ -60,7 +60,9 @@ const shimmerConfig: ShimmerConfig = {
 // Shadow markers (rendered chars in parens):
 // _ = full shadow cell (space with bg=shadow)
 // ^ = letter top, shadow bottom (▀ with fg=letter, bg=shadow)
+// v = shadow top, letter bottom (▄ with fg=letter, bg=shadow)
 // ~ = shadow top only (▀ with fg=shadow)
+// , = shadow bottom only (▄ with fg=shadow)
 const GAP = 1
 const WIDTH = 0.76
 const GAIN = 2.3
@@ -760,6 +762,19 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
             selectable={false}
           >
             ▀
+          </text>
+        )
+      }
+
+      if (char === "v") {
+        return (
+          <text
+            fg={shade(inkBot, theme, n + p + e + b)}
+            bg={shade(shadowTop, theme, ghost(s, 0.18) + ghost(q, 0.05) + ghost(b, 0.08))}
+            attributes={attrs}
+            selectable={false}
+          >
+            ▄
           </text>
         )
       }

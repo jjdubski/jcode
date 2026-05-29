@@ -1,5 +1,5 @@
 export const logo = {
-  left: ["⠀   ▄", "    █", " █  █", "  ▀▀ "],
+  left: ["⠀   ▀", "    █", " █__█", " ▀▀▀▀"],
   right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
 }
 
@@ -8,4 +8,5 @@ export const go = {
   right: ["    ", "█▀▀█", "█__█", "▀▀▀▀"],
 }
 
-export const marks = "_^~,"
+// _ is top/bottom shadow, ^ is letter top w/ bottom shadow, v is letter bottom w/ top shadow, ~ is top shadow, , is bottom shadow
+export const marks = "_^~,v"

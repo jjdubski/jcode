@@ -3,10 +3,10 @@ import { Schema } from "effect"
 import { logo as glyphs } from "./logo"
 
 const wordmark = [
-  `⠀   ▄              ▄       `,
+  `⠀   ▀              ▄       `,
   `    █ █▀▀▀ █▀▀█ █▀▀█ █▀▀█`,
   ` █  █ █    █  █ █  █ █▀▀▀`,
-  `  ▀▀  ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀`,
+  ` ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀`,
 ]
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("UICancelledError", {}) {}
@@ -78,6 +78,10 @@ export function logo(pad?: string) {
       }
       if (char === "^") {
         parts.push(fg, bg, "▀", reset)
+        continue
+      }
+      if (char === "v") {
+        parts.push(fg, bg, "▄", reset)
         continue
       }
       if (char === "~") {
