@@ -58,13 +58,7 @@ const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px
 
 const makeSessionHref = (b64Dir: string, sessionId: string) => `/${b64Dir}/session/${sessionId}`
 
-export type TitlebarUpdate = {
-  version: () => string | undefined
-  installing: () => boolean
-  install: () => void
-}
-
-export function Titlebar(props: { update?: TitlebarUpdate }) {
+export function Titlebar() {
   const layout = useLayout()
   const platform = usePlatform()
   const command = useCommand()
@@ -120,19 +114,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const canForward = createMemo(() => history.index < history.stack.length - 1)
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
-  const updateState = createMemo<TitlebarUpdatePillState>(() => {
-    const version = props.update?.version()
-    return {
-      visible: version !== undefined,
-      installing: props.update?.installing() ?? false,
-      label: "Update",
-      ariaLabel: language.t("toast.update.action.installRestart"),
-      title: version ? `Update ${version}` : undefined,
-      onInstall: () => props.update?.install(),
-    }
-  })
   const v2RightState = createMemo<TitlebarV2RightState>(() => ({
-    update: updateState(),
     statusVisible: !params.dir && settings.general.showStatus(),
     statusLabel: language.t("status.popover.trigger"),
   }))
@@ -685,17 +667,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   )
 }
 
-type TitlebarUpdatePillState = {
-  visible: boolean
-  installing: boolean
-  label: string
-  ariaLabel: string
-  title?: string
-  onInstall: () => void
-}
-
 type TitlebarV2RightState = {
-  update: TitlebarUpdatePillState
   statusVisible: boolean
   statusLabel: string
 }
@@ -703,7 +675,6 @@ type TitlebarV2RightState = {
 function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
   return (
     <div class="flex shrink-0 items-center justify-end gap-0">
-      <TitlebarUpdatePill state={props.state.update} />
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 scope="server" />
@@ -711,23 +682,6 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
       </Show>
       <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
     </div>
-  )
-}
-
-function TitlebarUpdatePill(props: { state: TitlebarUpdatePillState }) {
-  return (
-    <Show when={props.state.visible}>
-      <button
-        type="button"
-        class="h-5 shrink-0 rounded-[27px] bg-[var(--v2-background-bg-layer-03)] px-2.5 text-[11px] font-[530] leading-4 tracking-[0.05px] text-[var(--v2-text-text-base)] disabled:opacity-60"
-        onClick={props.state.onInstall}
-        disabled={props.state.installing}
-        aria-label={props.state.ariaLabel}
-        title={props.state.title}
-      >
-        {props.state.label}
-      </button>
-    </Show>
   )
 }
 

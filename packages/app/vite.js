@@ -31,6 +31,9 @@ export default [
         worker: {
           format: "es",
         },
+        esbuild: {
+          include: /\.(m?ts|tsx)$/,
+        },
       }
     },
   },
