@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
+import { createRequire } from "module"
+const require = createRequire(import.meta.url)
 const childProcess = require("child_process")
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
+import { fileURLToPath } from "url"
 
+const __filename = fileURLToPath(import.meta.url)
 const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"]
 
 function run(target) {
@@ -70,7 +74,7 @@ let arch = archMap[os.arch()]
 if (!arch) {
   arch = os.arch()
 }
-const base = "opencode-" + platform + "-" + arch
+const base = "jcode-" + platform + "-" + arch
 const binary = platform === "windows" ? "opencode.exe" : "opencode"
 
 function supportsAvx2() {
@@ -186,7 +190,17 @@ function findBinary(startDir) {
   }
 }
 
-const resolved = envPath || (fs.existsSync(cached) ? cached : findBinary(scriptDir))
+function findDistBinary(pkgDir) {
+  const dist = path.join(pkgDir, "dist")
+  if (!fs.existsSync(dist)) return
+  for (const name of names) {
+    const candidate = path.join(dist, name, "bin", binary)
+    if (fs.existsSync(candidate)) return candidate
+  }
+}
+
+const pkgDir = path.resolve(scriptDir, "..")
+const resolved = envPath || (fs.existsSync(cached) ? cached : findBinary(scriptDir) || findDistBinary(pkgDir))
 if (!resolved) {
   console.error(
     "It seems that your package manager failed to install the right version of the opencode CLI for your platform. You can try manually installing " +
