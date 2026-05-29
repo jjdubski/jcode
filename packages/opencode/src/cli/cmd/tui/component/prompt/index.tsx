@@ -9,7 +9,7 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import { createEffect, createMemo, createResource, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -29,6 +29,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { assign, expandPastedTextPlaceholders } from "./part"
+import { expand, has, references } from "./skill"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -303,6 +304,11 @@ export function Prompt(props: PromptProps) {
   const fileStyleId = syntax().getStyleId("extmark.file")!
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
+  const skillStyleId = syntax().getStyleId("extmark.skill")!
+  const [skills] = createResource(async () => {
+    const result = await sdk.client.app.skills()
+    return result.data ?? []
+  })
   let promptPartTypeId = 0
   const event = useEvent()
 
@@ -745,7 +751,7 @@ export function Prompt(props: PromptProps) {
         start = part.source.text.start
         end = part.source.text.end
         virtualText = part.source.text.value
-        styleId = pasteStyleId
+        styleId = part.source.kind === "skill" ? skillStyleId : pasteStyleId
       }
 
       if (virtualText) {
@@ -1181,6 +1187,10 @@ export function Prompt(props: PromptProps) {
           })),
       })
     } else {
+      if (has(inputText)) {
+        inputText = expand(inputText, (name) => skills()?.find((skill) => skill.name === name))
+      }
+
       sdk.client.session
         .prompt({
           sessionID,
@@ -1256,6 +1266,7 @@ export function Prompt(props: PromptProps) {
               end: extmarkEnd,
               value: virtualText,
             },
+            kind: "paste",
           },
         })
         draft.extmarkToPartIndex.set(extmarkId, partIndex)
@@ -1314,7 +1325,36 @@ export function Prompt(props: PromptProps) {
       return
     }
 
+    const pasteStartOffset = input.visualCursor.offset
     input.insertText(normalizedText)
+
+    const validSkillNames = new Set((skills() ?? []).map((s) => s.name))
+    const skillRefs = references(normalizedText).filter((r) => validSkillNames.has(r.name))
+    for (const ref of skillRefs) {
+      const extmarkStart = pasteStartOffset + ref.start
+      const extmarkEnd = pasteStartOffset + ref.end
+      const extmarkId = input.extmarks.create({
+        start: extmarkStart,
+        end: extmarkEnd,
+        virtual: true,
+        styleId: skillStyleId,
+        typeId: promptPartTypeId,
+      })
+      setStore(
+        produce((draft) => {
+          const partIndex = draft.prompt.parts.length
+          draft.prompt.parts.push({
+            type: "text",
+            text: ref.value,
+            source: {
+              text: { start: extmarkStart, end: extmarkEnd, value: ref.value },
+              kind: "skill",
+            },
+          })
+          draft.extmarkToPartIndex.set(extmarkId, partIndex)
+        }),
+      )
+    }
 
     setTimeout(() => {
       if (!input || input.isDestroyed) return
@@ -1805,6 +1845,8 @@ export function Prompt(props: PromptProps) {
         value={store.prompt.input}
         fileStyleId={fileStyleId}
         agentStyleId={agentStyleId}
+        skillStyleId={skillStyleId}
+        skills={skills}
         promptPartTypeId={() => promptPartTypeId}
       />
     </>
