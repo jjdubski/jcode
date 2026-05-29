@@ -11,9 +11,9 @@ describe("Database.getChannelPath", () => {
   it.effect("returns database path for the current channel", () =>
     Effect.gen(function* () {
       const flags = yield* RuntimeFlags.Service
-      const expected = ["latest", "beta", "prod"].includes(InstallationChannel)
-        ? path.join(Global.Path.data, "opencode.db")
-        : path.join(Global.Path.data, `opencode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+      const expected = InstallationChannel === "local"
+        ? path.join(Global.Path.data, "opencode-local.db")
+        : path.join(Global.Path.data, "opencode.db")
 
       expect(Database.getChannelPath(flags)).toBe(expected)
     }).pipe(Effect.provide(RuntimeFlags.layer())),
