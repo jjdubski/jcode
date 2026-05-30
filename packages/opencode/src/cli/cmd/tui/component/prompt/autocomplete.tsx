@@ -558,17 +558,15 @@ export function Autocomplete(props: {
     })
 
     props.setPrompt((draft) => {
+      if (draft.parts.some((p) => p.type === "skill" && p.name === name)) return
       const partIndex = draft.parts.length
       draft.parts.push({
-        type: "text",
-        text: virtualText,
+        type: "skill",
+        name,
         source: {
-          text: {
-            start: extmarkStart,
-            end: extmarkEnd,
-            value: virtualText,
-          },
-          kind: "skill",
+          start: extmarkStart,
+          end: extmarkEnd,
+          value: virtualText,
         },
       })
       props.setExtmark(partIndex, extmarkId)
@@ -871,6 +869,11 @@ export function Autocomplete(props: {
         const skillIdx = mentionTriggerIndex(value, offset, "$")
         const idx = Math.max(mentionIdx ?? -1, skillIdx ?? -1)
         if (idx === -1) return
+        if (skillIdx !== undefined && skillIdx === idx) {
+          const query = props.input().getTextRange(skillIdx, offset)
+          if (/^\$[A-Z_][A-Z0-9_]*$/.test(query) && !(props.skills() ?? []).some((skill) => `$${skill.name}` === query))
+            return
+        }
         show(skillIdx !== undefined && skillIdx === idx ? "$" : "@")
         setStore("index", idx)
       },
