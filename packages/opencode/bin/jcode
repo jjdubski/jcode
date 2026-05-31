@@ -75,7 +75,7 @@ if (!arch) {
   arch = os.arch()
 }
 const base = "jcode-" + platform + "-" + arch
-const binary = platform === "windows" ? "opencode.exe" : "opencode"
+const binary = platform === "windows" ? "jcode.exe" : "jcode"
 
 function supportsAvx2() {
   if (arch !== "x64") return false
