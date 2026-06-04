@@ -618,9 +618,9 @@ export type Part =
   | SnapshotPart
   | PatchPart
   | AgentPart
+  | SkillPart
   | RetryPart
   | CompactionPart
-  | SkillPart
 
 export type QuestionOption = {
   /**
@@ -1557,6 +1557,7 @@ export type PermissionConfig =
 
 export type AgentConfig = {
   model?: string
+  backupModel?: Array<string>
   variant?: string
   temperature?: number
   top_p?: number
@@ -1581,6 +1582,7 @@ export type AgentConfig = {
   [key: string]:
     | unknown
     | string
+    | Array<string>
     | number
     | {
         [key: string]: boolean
@@ -2228,6 +2230,10 @@ export type Agent = {
     modelID: string
     providerID: string
   }
+  backupModel?: Array<{
+    modelID: string
+    providerID: string
+  }>
   variant?: string
   prompt?: string
   options: {
@@ -7097,7 +7103,7 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SkillPartInput | SubtaskPartInput>
   }
   path: {
     sessionID: string
@@ -7444,7 +7450,7 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
-    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SkillPartInput | SubtaskPartInput>
   }
   path: {
     sessionID: string

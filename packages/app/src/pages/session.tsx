@@ -866,6 +866,29 @@ export default function Page() {
     ),
   )
 
+  createEffect(
+    on(
+      () => sync.data.message[params.id ?? ""],
+      (messages) => {
+        if (!messages?.length) return
+        const agent = local.agent.current()
+        const backups = agent?.backupModel
+        if (!backups?.length) return
+        const lastAssistant = messages.findLast((m) => m.role === "assistant")
+        if (!lastAssistant) return
+        const matched = backups.find(
+          (b) => b.providerID === lastAssistant.providerID && b.modelID === lastAssistant.modelID,
+        )
+        if (!matched) return
+        const model = local.model.current()
+        if (!model) return
+        if (model.provider.id === matched.providerID && model.id === matched.modelID) return
+        local.model.set({ providerID: matched.providerID, modelID: matched.modelID }, { recent: true })
+      },
+      { defer: true },
+    ),
+  )
+
   const fileTreeTab = () => layout.fileTree.tab()
   const setFileTreeTab = (value: "changes" | "all") => layout.fileTree.setTab(value)
 

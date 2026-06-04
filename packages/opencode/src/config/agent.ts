@@ -21,6 +21,9 @@ const Color = Schema.Union([
 const AgentSchema = Schema.StructWithRest(
   Schema.Struct({
     model: Schema.optional(ConfigModelID),
+    backupModel: Schema.optional(Schema.mutable(Schema.Array(ConfigModelID))).annotate({
+      description: "Backup models (provider/model) tried in order when the primary model fails.",
+    }),
     variant: Schema.optional(Schema.String).annotate({
       description: "Default model variant for this agent (applies only when using the agent's configured model).",
     }),
@@ -52,6 +55,7 @@ const AgentSchema = Schema.StructWithRest(
 const KNOWN_KEYS = new Set([
   "name",
   "model",
+  "backupModel",
   "variant",
   "prompt",
   "description",
