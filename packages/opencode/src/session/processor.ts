@@ -134,9 +134,9 @@ export const layer = Layer.effect(
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
-      const parse = (e: unknown) =>
+      const parse = (e: unknown, providerID?: ProviderV2.ID) =>
         MessageV2.fromError(e, {
-          providerID: input.model.providerID,
+          providerID: providerID ?? input.model.providerID,
           aborted,
         })
 
@@ -962,7 +962,7 @@ export const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         // Inherits tracing from SessionProcessor.process (inner Effect.fn overhead not needed here).
-        const runStream = (si: LLM.StreamInput, providerID: string, maxRetries?: number) =>
+        const runStream = (si: LLM.StreamInput, providerID: ProviderV2.ID, maxRetries?: number) =>
           Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.currentTextID = undefined
@@ -993,7 +993,7 @@ export const layer = Layer.effect(
               SessionRetry.policy({
                 provider: providerID,
                 maxRetries,
-                parse,
+                parse: (e) => parse(e, providerID),
                 set: (info) => {
                   // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
                   const event = mirrorAssistant
@@ -1029,9 +1029,10 @@ export const layer = Layer.effect(
 
         return yield* Effect.gen(function* () {
           if (backupModels.length > 0) {
-            // When backup models are configured, individual model retries are
-            // disabled (maxRetries: 0) in favor of falling through to the next
-            // backup model immediately.
+            // When backup models are configured, the primary model gets no
+            // Effect-level retries (maxRetries: 0) so it falls through to
+            // the backup models quickly after a definitive failure. Backup
+            // models are allowed one retry to survive transient errors.
             const primaryResult = yield* runStream(streamInput, input.model.providerID, 0).pipe(Effect.exit)
 
             // Track whether ANY model hit overflow so we only compact as a
@@ -1049,6 +1050,12 @@ export const layer = Layer.effect(
               if (SessionV1.ContextOverflowError.isInstance(parsedError)) {
                 needsCompaction = true
                 yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error: parsedError })
+              } else {
+                slog.warn("primary model failed, trying backups", {
+                  providerID: streamInput.model.providerID,
+                  modelID: streamInput.model.id,
+                  error: errorMessage(parsedError ?? "unknown error"),
+                })
               }
             }
 
@@ -1068,7 +1075,7 @@ export const layer = Layer.effect(
                 ctx.assistantMessage.providerID = bm.providerID
                 yield* session.updateMessage(ctx.assistantMessage)
                 const backupInput = { ...streamInput, model: bm }
-                const result = yield* runStream(backupInput, bm.providerID, 0).pipe(Effect.exit)
+                const result = yield* runStream(backupInput, bm.providerID, 1).pipe(Effect.exit)
                 if (Exit.isSuccess(result)) effectiveModel = bm
                 if (Exit.isSuccess(result) && !ctx.needsCompaction) {
                   yield* session.updatePart({
@@ -1088,10 +1095,17 @@ export const layer = Layer.effect(
                 if (Exit.isFailure(result)) {
                   const parsedError = Exit.match(result, {
                     onSuccess: () => undefined,
-                    onFailure: (cause) => parse(Cause.squash(cause)),
+                    onFailure: (cause) => parse(Cause.squash(cause), bm.providerID),
                   })
-                  if (SessionV1.ContextOverflowError.isInstance(parsedError)) {
+                  if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
                     needsCompaction = true
+                  }
+                  if (parsedError !== undefined && !SessionV1.ContextOverflowError.isInstance(parsedError)) {
+                    slog.warn("backup model failed", {
+                      providerID: bm.providerID,
+                      modelID: bm.id,
+                      error: errorMessage(parsedError),
+                    })
                   }
                 }
               }
