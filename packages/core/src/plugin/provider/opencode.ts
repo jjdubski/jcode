@@ -17,7 +17,12 @@ export const OpencodePlugin = PluginV2.define({
             (item.provider.enabled && item.provider.enabled.via === "account"),
         )
         evt.provider.update(item.provider.id, (provider) => {
-          if (!hasKey) provider.request.body.apiKey = "public"
+          if (!hasKey) {
+            // No-op: do not inject a fake apiKey. Sending "Bearer public"
+            // causes the Zen API to reject requests (401). Unauthenticated
+            // requests (no Authorization header) are handled by the API's
+            // free-tier logic instead.
+          }
         })
         if (hasKey) return
         for (const model of item.models.values()) {
