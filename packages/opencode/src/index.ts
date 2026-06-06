@@ -55,7 +55,7 @@ function show(out: string) {
   const text = out.trimStart()
     if (!text.startsWith("jcode ")) {
     process.stderr.write(UI.logo() + EOL + EOL)
-    process.stderr.write(text)
+    process.stderr.write(text + EOL)
     return
   }
   process.stderr.write(out)

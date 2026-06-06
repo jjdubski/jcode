@@ -1132,6 +1132,7 @@ export function Prompt(props: PromptProps) {
       })
     } else {
       move.startSubmit()
+
       // Ensure every $skillname reference has a structured SkillPartInput
       const refNames = new Set(references(inputText).map((ref) => ref.name))
       if (refNames.size > 0) {
