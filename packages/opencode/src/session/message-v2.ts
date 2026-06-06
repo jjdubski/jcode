@@ -56,6 +56,13 @@ function truncateToolOutput(text: string, maxChars?: number) {
   return `${text.slice(0, maxChars)}\n[Tool output truncated for compaction: omitted ${omitted} chars]`
 }
 
+function unsupportedUrlScheme(url: string): boolean {
+  const parsed = URL.parse(url)
+  if (!parsed) return true
+  if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:" || parsed.protocol === "file:") return false
+  return true
+}
+
 
 export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
@@ -138,7 +145,7 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
 
 function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
-  const { providerExecuted: _, ...rest } = metadata
+  const { providerExecuted: _, muted: __, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
 }
 
@@ -224,7 +231,12 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
           })
         // text/plain and directory files are converted into text parts, ignore them
         if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
-          if (options?.stripMedia && isMedia(part.mime)) {
+          if (unsupportedUrlScheme(part.url)) {
+            userMessage.parts.push({
+              type: "text",
+              text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
+            })
+          } else if (options?.stripMedia && isMedia(part.mime)) {
             userMessage.parts.push({
               type: "text",
               text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
@@ -291,10 +303,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
       for (const part of msg.parts) {
         if (part.type === "text") {
           const text = part.text === "" && hasSignedReasoning ? " " : part.text
+          const provMeta = differentModel ? undefined : providerMeta(part.metadata)
           assistantMessage.parts.push({
             type: "text",
             text,
-            ...(differentModel ? {} : { providerMetadata: part.metadata }),
+            ...(provMeta ? { providerMetadata: provMeta } : {}),
           })
         }
         if (part.type === "step-start")
@@ -419,7 +432,12 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 
   return yield* Effect.promise(() =>
     convertToModelMessages(
-      result.filter((msg) => msg.parts.some((part) => part.type !== "step-start")),
+      // AI SDK v6 Zod validation requires `content` alongside `parts`.
+      // Add `content` as a mirror of `parts` so messages pass
+      // modelMessageSchema validation regardless of internal conversion.
+      result
+        .filter((msg) => msg.parts.some((part) => part.type !== "step-start"))
+        .map((msg) => ({ ...msg, content: msg.parts } as any)),
       {
         //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
         tools,

@@ -798,7 +798,6 @@ export const layer = Layer.effect(
                   })
                 }
               }
-              pieces.push({ ...part, messageID: info.id, sessionID: input.sessionID })
             } else {
               const error = Cause.squash(exit.cause)
               log.error("failed to read MCP resource", { error, clientName, uri })
@@ -1346,7 +1345,15 @@ export const layer = Layer.effect(
                     ),
                   ),
                 ),
-              ).pipe(Effect.map((arr) => arr.filter((m) => m !== undefined)))
+              ).pipe(
+                Effect.map((arr) =>
+                  arr.filter(
+                    (m): m is NonNullable<typeof m> =>
+                      m !== undefined &&
+                      !(m.providerID === model.providerID && m.id === model.id),
+                  ),
+                ),
+              )
             : undefined
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps

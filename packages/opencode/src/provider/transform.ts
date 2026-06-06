@@ -95,7 +95,14 @@ function normalizeMessages(
         return msg
 
       case "system":
-        msg.content = sanitizeSurrogates(msg.content)
+        if (Array.isArray(msg.content)) {
+          msg.content = msg.content
+            .filter((part): part is { type: "text"; text: string } => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+        } else {
+          msg.content = sanitizeSurrogates(msg.content as string)
+        }
         return msg
 
       case "user":

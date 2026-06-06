@@ -1026,6 +1026,7 @@ export const layer = Layer.effect(
 
         // backupModels are already filtered for undefined upstream in prompt.ts
         const backupModels = input.backupModels ?? []
+        const modelErrors: Array<{ providerID: string; modelID: string; error: string }> = []
 
         return yield* Effect.gen(function* () {
           if (backupModels.length > 0) {
@@ -1051,10 +1052,16 @@ export const layer = Layer.effect(
                 needsCompaction = true
                 yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error: parsedError })
               } else {
+                const primaryModelError = errorMessage(parsedError ?? "unknown error")
+                modelErrors.push({
+                  providerID: streamInput.model.providerID,
+                  modelID: streamInput.model.id,
+                  error: primaryModelError,
+                })
                 slog.warn("primary model failed, trying backups", {
                   providerID: streamInput.model.providerID,
                   modelID: streamInput.model.id,
-                  error: errorMessage(parsedError ?? "unknown error"),
+                  error: primaryModelError,
                 })
               }
             }
@@ -1101,10 +1108,16 @@ export const layer = Layer.effect(
                     needsCompaction = true
                   }
                   if (parsedError !== undefined && !SessionV1.ContextOverflowError.isInstance(parsedError)) {
+                    const backupModelError = errorMessage(parsedError)
+                    modelErrors.push({
+                      providerID: bm.providerID,
+                      modelID: bm.id,
+                      error: backupModelError,
+                    })
                     slog.warn("backup model failed", {
                       providerID: bm.providerID,
                       modelID: bm.id,
-                      error: errorMessage(parsedError),
+                      error: backupModelError,
                     })
                   }
                 }
@@ -1121,7 +1134,8 @@ export const layer = Layer.effect(
 
             if (!modelSucceeded) {
               if (needsCompaction) return "compact" as const
-              yield* halt(new Error("All configured models failed"))
+              const detail = modelErrors.map((m) => `[${m.providerID}/${m.modelID}] ${m.error}`).join("; ")
+              yield* halt(new Error(`All configured models failed: ${detail}`))
               return "stop" as const
             }
 
