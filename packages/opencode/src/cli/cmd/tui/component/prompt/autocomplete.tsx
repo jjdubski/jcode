@@ -574,18 +574,15 @@ export function Autocomplete(props: {
       return referenceAliasesValue.filter((item) => item.display === `@${referenceMatchValue.name}`)
     } 
 
-    const mixed: AutocompleteOption[] =
-      store.visible === "@"
-        ? [...referenceAliasesValue, ...agentsValue, ...(filesValue || []), ...mcpResources()]
-        : store.visible === "$"
-          ? skillsValue
-          : [...commandsValue]  
-
     // Files come from fff already fuzzy ranked and filtered
     // it shouldn't be additionally sorted by fuzzysort as it will loose the results
     const fileOptions: AutocompleteOption[] = store.visible === "@" ? filesValue || [] : []
     const nonFileOptions: AutocompleteOption[] =
-      store.visible === "@" ? [...referenceAliasesValue, ...agentsValue, ...mcpResources()] : [...commandsValue]
+      store.visible === "@"
+        ? [...referenceAliasesValue, ...agentsValue, ...mcpResources()]
+        : store.visible === "$"
+          ? skillsValue
+          : [...commandsValue]
 
     if (!searchValue) {
       return [...nonFileOptions, ...fileOptions]
