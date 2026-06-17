@@ -436,7 +436,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
       // modelMessageSchema validation regardless of internal conversion.
       result
         .filter((msg) => msg.parts.some((part) => part.type !== "step-start"))
-        .map((msg) => ({ ...msg, content: msg.parts } as any)),
+        // Spread creates a wider type than UIMessage; content is added
+        // for AI SDK v6 Zod validation. Cast to the target type.
+        .map((msg) => ({ ...msg, content: msg.parts } as unknown as UIMessage)),
       {
         //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
         tools,

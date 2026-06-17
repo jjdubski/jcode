@@ -173,6 +173,12 @@ function parseJSON(value: unknown) {
   })
 }
 
+/**
+ * Creates a retry policy schedule. With `maxRetries: 0`, the first attempt
+ * runs but no retries occur after failure. With `maxRetries: 1`, one retry
+ * follows the initial attempt. `maxRetries` defaults to undefined (unlimited
+ * retries) when omitted.
+ */
 export function policy(opts: {
   provider: string
   maxRetries?: number

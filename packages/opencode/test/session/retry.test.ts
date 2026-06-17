@@ -114,6 +114,77 @@ describe("session.retry.delay", () => {
       })
     }),
   )
+
+  it.instance("policy with maxRetries: 0 stops after first attempt", () =>
+    Effect.gen(function* () {
+      const error = apiError({ "retry-after-ms": "0" })
+      let setCallCount = 0
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          maxRetries: 0,
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: () => {
+            setCallCount++
+            return Effect.void
+          },
+        }),
+      )
+      // With maxRetries: 0, meta.attempt > 0 → Cause.done → set() never called.
+      // Use Effect.exit to capture both success and Cause.done cases.
+      yield* step(error).pipe(Effect.exit)
+      expect(setCallCount).toBe(0)
+      // The step should have stopped (via Cause.done or kept as success).
+      // We just verify no set() call happened.
+    }),
+  )
+
+  it.instance("policy with maxRetries: 1 allows one retry then stops", () =>
+    Effect.gen(function* () {
+      const error = apiError({ "retry-after-ms": "0" })
+      let setCallCount = 0
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          maxRetries: 1,
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: () => {
+            setCallCount++
+            return Effect.void
+          },
+        }),
+      )
+      // First call (attempt 1): meta.attempt (1) <= maxRetries (1), set() called
+      yield* step(error).pipe(Effect.exit)
+      expect(setCallCount).toBe(1)
+
+      // Second call (attempt 2): meta.attempt (2) > maxRetries (1), stops — set() not called
+      yield* step(error).pipe(Effect.exit)
+      expect(setCallCount).toBe(1)
+    }),
+  )
+
+  it.instance("policy with maxRetries: undefined retries indefinitely", () =>
+    Effect.gen(function* () {
+      const error = apiError({ "retry-after-ms": "0" })
+      let setCallCount = 0
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: () => {
+            setCallCount++
+            return Effect.void
+          },
+        }),
+      )
+      for (let i = 0; i < 5; i++) {
+        yield* step(error).pipe(Effect.exit)
+      }
+      // With maxRetries undefined, set() is called every time
+      expect(setCallCount).toBe(5)
+    }),
+  )
 })
 
 describe("session.retry.retryable", () => {

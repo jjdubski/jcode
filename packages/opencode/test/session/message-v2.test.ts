@@ -1659,3 +1659,234 @@ describe("session.message-v2.latest", () => {
     expect(state.tasks[0]).toMatchObject({ type: "compaction", auto: true })
   })
 })
+
+describe("session.message-v2.providerMeta", () => {
+  test("filters muted and providerExecuted from text part metadata", async () => {
+    const userID = "m-providermeta-user"
+    const assistantID = "m-providermeta-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "hello" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "text",
+            text: "response",
+            metadata: {
+              providerExecuted: true,
+              muted: true,
+              openai: { key: "val" },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model)
+    expect(result).toHaveLength(2)
+
+    const assistantMsg = result.find((m) => m.role === "assistant")
+    expect(assistantMsg).toBeDefined()
+    const textPart = (assistantMsg!.content as any[]).find((p) => p.type === "text")
+    expect(textPart).toBeDefined()
+    // providerExecuted and muted should be stripped; openai should survive as providerOptions
+    expect(textPart.providerOptions).toEqual({ openai: { key: "val" } })
+  })
+
+  test("omits callProviderMetadata when only internal keys present", async () => {
+    const userID = "m-callmeta-user"
+    const assistantID = "m-callmeta-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "hello" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "text",
+            text: "response",
+            metadata: {
+              providerExecuted: true,
+              muted: true,
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model)
+    expect(result).toHaveLength(2)
+
+    const assistantMsg = result.find((m) => m.role === "assistant")
+    expect(assistantMsg).toBeDefined()
+    const textPart = (assistantMsg!.content as any[]).find((p) => p.type === "text")
+    expect(textPart).toBeDefined()
+    // With only internal keys, providerOptions should be absent
+    expect(textPart).not.toHaveProperty("providerOptions")
+  })
+
+  test("preserves providerExecuted flag when muted and providerMeta both present", async () => {
+    const userID = "m-flag-user"
+    const assistantID = "m-flag-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "hello" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "tool",
+            callID: "call-flag-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: "ls" },
+              output: "ok",
+              title: "Bash",
+              metadata: {},
+              time: { start: 0, end: 1 },
+            },
+            metadata: {
+              providerExecuted: true,
+              muted: true,
+              openai: { tool: "meta" },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model)
+    expect(result).toHaveLength(2)
+
+    // The tool-call should have providerExecuted: true
+    const assistantMsg = result.find((m) => m.role === "assistant")
+    expect(assistantMsg).toBeDefined()
+    const toolPart = (assistantMsg!.content as any[]).find((p) => p.type === "tool-call")
+    expect(toolPart).toBeDefined()
+    expect(toolPart.providerExecuted).toBe(true)
+  })
+})
+
+describe("session.message-v2.unsupportedUrlScheme", () => {
+  test("replaces ftp:// file URLs with descriptive text", async () => {
+    const messageID = "m-ftp-user"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1"),
+            type: "file",
+            mime: "image/png",
+            filename: "notes.png",
+            url: "ftp://files.example.com/notes.png",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Attached image/png: notes.png]" }],
+      },
+    ])
+  })
+
+  test("replaces unsupported // protocol files with descriptive text", async () => {
+    const messageID = "m-unknown-user"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1"),
+            type: "file",
+            mime: "application/pdf",
+            filename: "doc.pdf",
+            url: "gopher://server.example.com/doc.pdf",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Attached application/pdf: doc.pdf]" }],
+      },
+    ])
+  })
+
+  test("passes data: URLs through as file parts", async () => {
+    const messageID = "m-data-user"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1"),
+            type: "file",
+            mime: "image/png",
+            filename: "img.png",
+            url: "data:image/png;base64,iVBOR=",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "file", mediaType: "image/png", filename: "img.png", data: "data:image/png;base64,iVBOR=" },
+        ],
+      },
+    ])
+  })
+
+  test("passes file:// URLs through as file parts", async () => {
+    const messageID = "m-file-user"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1"),
+            type: "file",
+            mime: "image/png",
+            filename: "local.png",
+            url: "file:///home/user/local.png",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "file", mediaType: "image/png", filename: "local.png", data: "file:///home/user/local.png" },
+        ],
+      },
+    ])
+  })
+})

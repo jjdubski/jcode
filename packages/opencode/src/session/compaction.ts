@@ -336,9 +336,15 @@ export const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+
+      // Use the model from the compaction message (set by create()) so
+      // callers like prompt.ts can pass a backup model override. The
+      // compaction agent's configured model is intentionally ignored here
+      // in favor of the caller's explicit choice.
+      const model = yield* provider.getModel(
+        userMessage.model.providerID,
+        userMessage.model.modelID,
+      ).pipe(Effect.orDie)
 
       // Resolve backup models from the user's agent so compaction falls back
       // to a working model when the primary has exceeded usage limits.

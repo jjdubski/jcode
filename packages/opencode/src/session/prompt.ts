@@ -1413,7 +1413,9 @@ export const layer = Layer.effect(
             // only appears once per prompt rather than on every message.
             if (handle.message.providerID !== model.providerID || handle.message.modelID !== model.id) {
               modelOverride = yield* getModel(
+                // Stored as strings but structurally compatible with branded types.
                 handle.message.providerID as ProviderV2.ID,
+                // Stored as strings but structurally compatible with branded types.
                 handle.message.modelID as ModelV2.ID,
                 sessionID,
               )

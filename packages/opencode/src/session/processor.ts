@@ -136,6 +136,14 @@ export const layer = Layer.effect(
           aborted,
         })
 
+      // Extracts a parsed error from an Exit value. Returns undefined on success,
+      // so callers should check Exit.isFailure before calling.
+      const parseExitFailure = (result: Exit.Exit<unknown, unknown>, providerID?: ProviderV2.ID) =>
+        Exit.match(result, {
+          onSuccess: () => undefined,
+          onFailure: (cause) => parse(Cause.squash(cause), providerID),
+        })
+
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
         delete ctx.toolcalls[toolCallID]
@@ -1033,119 +1041,127 @@ export const layer = Layer.effect(
         const backupModels = input.backupModels ?? []
         const modelErrors: Array<{ providerID: string; modelID: string; error: string }> = []
 
+        // Tries primary + backup models sequentially. Backup models are
+        // attempted one at a time (not in parallel) to avoid duplicate work
+        // and keep state tracking simple. This adds worst-case latency of
+        // (N backups × request time), but backup fallback is an exceptional
+        // path; parallel fan-out would risk burning multiple API limits.
+        const tryBackupModels = (): Effect.Effect<"continue" | "compact" | "stop", never> =>
+          Effect.gen(function* () {
+          // The primary model gets one retry so transient errors (network
+          // blips, rate-limit spikes) don't skip straight to backups. Backup
+          // models also get one retry each.
+          const retries = 1
+          const primaryResult = yield* runStream(streamInput, input.model.providerID, retries).pipe(Effect.exit)
+
+          // Effective model defaults to the primary so that when all
+          // backups fail outright (not with overflow), we revert
+          // modelID/providerID to the primary rather than leaving stale
+          // values from the last failed backup.
+          let effectiveModel: Provider.Model | undefined = input.model
+
+          // Track whether ANY model hit overflow so we only compact as a
+          // last resort when no model can handle the full context.
+          let needsCompaction = ctx.needsCompaction
+
+          // Check if the primary model failed due to context overflow before
+          // attempting backup models — propagation through halt() is bypassed
+          // when using Effect.exit, so we handle it explicitly here.
+          if (Exit.isFailure(primaryResult)) {
+            const parsedError = parseExitFailure(primaryResult)
+            if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
+              needsCompaction = true
+              yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error: parsedError })
+            } else {
+              const primaryModelError = parsedError !== undefined ? errorMessage(parsedError) : "unknown error"
+              modelErrors.push({
+                providerID: streamInput.model.providerID,
+                modelID: streamInput.model.id,
+                error: primaryModelError,
+              })
+              yield* Effect.logWarning("primary model failed, trying backups", {
+                providerID: streamInput.model.providerID,
+                modelID: streamInput.model.id,
+                error: primaryModelError,
+              })
+            }
+          }
+
+          // Primary model succeeded without overflow.
+          // If it failed or needs compaction, try backup models before compacting.
+          let modelSucceeded = Exit.isSuccess(primaryResult) && !ctx.needsCompaction
+
+          if (!modelSucceeded) {
+            for (const bm of backupModels) {
+              ctx.assistantMessage.error = undefined
+              ctx.assistantMessage.modelID = bm.id
+              ctx.assistantMessage.providerID = bm.providerID
+              yield* session.updateMessage(ctx.assistantMessage)
+              const backupInput = { ...streamInput, model: bm }
+              const result = yield* runStream(backupInput, bm.providerID, retries).pipe(Effect.exit)
+              if (Exit.isSuccess(result)) effectiveModel = bm
+              if (Exit.isSuccess(result) && !ctx.needsCompaction) {
+                yield* session.updatePart({
+                  id: PartID.ascending(),
+                  messageID: ctx.assistantMessage.id,
+                  sessionID: ctx.assistantMessage.sessionID,
+                  type: "text",
+                  text: `Used backup model: ${bm.providerID}/${bm.id}\n`,
+                  synthetic: true,
+                  metadata: { muted: true },
+                } satisfies SessionV1.TextPart)
+                modelSucceeded = true
+                needsCompaction = false
+                break
+              }
+              if (ctx.needsCompaction) needsCompaction = true
+              if (Exit.isFailure(result)) {
+                const parsedError = parseExitFailure(result, bm.providerID)
+                if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
+                  needsCompaction = true
+                }
+                if (parsedError !== undefined && !SessionV1.ContextOverflowError.isInstance(parsedError)) {
+                  const backupModelError = errorMessage(parsedError)
+                  modelErrors.push({
+                    providerID: bm.providerID,
+                    modelID: bm.id,
+                    error: backupModelError,
+                  })
+                  yield* Effect.logWarning("backup model failed", {
+                    providerID: bm.providerID,
+                    modelID: bm.id,
+                    error: backupModelError,
+                  })
+                }
+              }
+            }
+
+            // Revert modelID to the effective model so prompt.ts picks
+            // the right model for compaction instead of a failed backup.
+            if (!modelSucceeded && effectiveModel) {
+              ctx.assistantMessage.modelID = effectiveModel.id
+              ctx.assistantMessage.providerID = effectiveModel.providerID
+              yield* session.updateMessage(ctx.assistantMessage)
+            }
+          }
+
+          if (!modelSucceeded) {
+            if (needsCompaction) return "compact" as const
+            const detail = modelErrors.map((m) => `[${m.providerID}/${m.modelID}] ${m.error}`).join("; ")
+            yield* halt(new Error(`All configured models failed: ${detail}`))
+            return "stop" as const
+          }
+
+          if (ctx.blocked || ctx.assistantMessage.error) return "stop" as const
+          return "continue" as const
+        })
+
         return yield* Effect.gen(function* () {
           if (backupModels.length > 0) {
-            // When backup models are configured, the primary model gets no
-            // Effect-level retries (maxRetries: 0) so it falls through to
-            // the backup models quickly after a definitive failure. Backup
-            // models are allowed one retry to survive transient errors.
-            const primaryResult = yield* runStream(streamInput, input.model.providerID, 0).pipe(Effect.exit)
-
-            // Track whether ANY model hit overflow so we only compact as a
-            // last resort when no model can handle the full context.
-            let needsCompaction = ctx.needsCompaction
-
-            // Check if the primary model failed due to context overflow before
-            // attempting backup models — propagation through halt() is bypassed
-            // when using Effect.exit, so we handle it explicitly here.
-            if (Exit.isFailure(primaryResult)) {
-              const parsedError = Exit.match(primaryResult, {
-                onSuccess: () => undefined,
-                onFailure: (cause) => parse(Cause.squash(cause)),
-              })
-              if (SessionV1.ContextOverflowError.isInstance(parsedError)) {
-                needsCompaction = true
-                yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error: parsedError })
-              } else {
-                const primaryModelError = errorMessage(parsedError ?? "unknown error")
-                modelErrors.push({
-                  providerID: streamInput.model.providerID,
-                  modelID: streamInput.model.id,
-                  error: primaryModelError,
-                })
-                yield* Effect.logWarning("primary model failed, trying backups", {
-                  providerID: streamInput.model.providerID,
-                  modelID: streamInput.model.id,
-                  error: primaryModelError,
-                })
-              }
-            }
-
-            // Primary model succeeded without overflow.
-            // If it failed or needs compaction, try backup models before compacting.
-            let modelSucceeded = Exit.isSuccess(primaryResult) && !ctx.needsCompaction
-
-            if (!modelSucceeded) {
-              // Track the last model that streamed successfully (even with
-              // overflow) — used to select the right model for compaction
-              // when all backups hit overflow but none failed outright.
-              let effectiveModel: Provider.Model | undefined
-
-              for (const bm of backupModels) {
-                ctx.assistantMessage.error = undefined
-                ctx.assistantMessage.modelID = bm.id
-                ctx.assistantMessage.providerID = bm.providerID
-                yield* session.updateMessage(ctx.assistantMessage)
-                const backupInput = { ...streamInput, model: bm }
-                const result = yield* runStream(backupInput, bm.providerID, 1).pipe(Effect.exit)
-                if (Exit.isSuccess(result)) effectiveModel = bm
-                if (Exit.isSuccess(result) && !ctx.needsCompaction) {
-                  yield* session.updatePart({
-                    id: PartID.ascending(),
-                    messageID: ctx.assistantMessage.id,
-                    sessionID: ctx.assistantMessage.sessionID,
-                    type: "text",
-                    text: `Used backup model: ${bm.providerID}/${bm.id}\n`,
-                    synthetic: true,
-                    metadata: { muted: true },
-                  } satisfies SessionV1.TextPart)
-                  modelSucceeded = true
-                  needsCompaction = false
-                  break
-                }
-                if (ctx.needsCompaction) needsCompaction = true
-                if (Exit.isFailure(result)) {
-                  const parsedError = Exit.match(result, {
-                    onSuccess: () => undefined,
-                    onFailure: (cause) => parse(Cause.squash(cause), bm.providerID),
-                  })
-                  if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
-                    needsCompaction = true
-                  }
-                  if (parsedError !== undefined && !SessionV1.ContextOverflowError.isInstance(parsedError)) {
-                    const backupModelError = errorMessage(parsedError)
-                    modelErrors.push({
-                      providerID: bm.providerID,
-                      modelID: bm.id,
-                      error: backupModelError,
-                    })
-                    yield* Effect.logWarning("backup model failed", {
-                      providerID: bm.providerID,
-                      modelID: bm.id,
-                      error: backupModelError,
-                    })
-                  }
-                }
-              }
-
-              // Revert modelID to the effective model so prompt.ts picks
-              // the right model for compaction instead of a failed backup.
-              if (!modelSucceeded && effectiveModel) {
-                ctx.assistantMessage.modelID = effectiveModel.id
-                ctx.assistantMessage.providerID = effectiveModel.providerID
-                yield* session.updateMessage(ctx.assistantMessage)
-              }
-            }
-
-            if (!modelSucceeded) {
-              if (needsCompaction) return "compact" as const
-              const detail = modelErrors.map((m) => `[${m.providerID}/${m.modelID}] ${m.error}`).join("; ")
-              yield* halt(new Error(`All configured models failed: ${detail}`))
-              return "stop" as const
-            }
-
-            if (ctx.blocked || ctx.assistantMessage.error) return "stop" as const
-            return "continue" as const
+            const result = yield* tryBackupModels()
+            if (result === "continue") return "continue" as const
+            if (result === "compact") return "compact" as const
+            return "stop" as const
           }
           yield* runStream(streamInput, input.model.providerID).pipe(Effect.catch(halt))
           if (ctx.needsCompaction) return "compact" as const
