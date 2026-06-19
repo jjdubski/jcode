@@ -337,17 +337,7 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode")).toEqual({
-      message: SessionRetry.GO_UPSELL_MESSAGE,
-      action: {
-        reason: "free_tier_limit",
-        provider: "opencode",
-        title: "Free limit reached",
-        message: "Subscribe to OpenCode Go for reliable access to the best open-source models, starting at $5/month.",
-        label: "subscribe",
-        link: SessionRetry.GO_UPSELL_URL,
-      },
-    })
+    expect(SessionRetry.retryable(error, "opencode")).toBeUndefined()
   })
 
   test("maps Go subscription limits to workspace PAYG upsell", () => {
@@ -373,19 +363,7 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode-go")).toEqual({
-      message:
-        "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance - https://opencode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
-      action: {
-        reason: "account_rate_limit",
-        provider: "opencode-go",
-        title: "Go limit reached",
-        message:
-          "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance",
-        label: "open settings",
-        link: "https://opencode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
-      },
-    })
+    expect(SessionRetry.retryable(error, "opencode-go")).toBeUndefined()
   })
 
   test("maps Go subscription limits without limit metadata", () => {
@@ -410,9 +388,7 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode-go")?.action?.message).toBe(
-      "Usage limit reached. It will reset in 15 minutes. To continue using this model now, enable usage from your available balance",
-    )
+    expect(SessionRetry.retryable(error, "opencode-go")).toBeUndefined()
   })
 })
 
