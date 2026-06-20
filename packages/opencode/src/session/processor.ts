@@ -825,6 +825,7 @@ export const layer = Layer.effect(
               },
               { text: ctx.currentText.text },
             )).text
+            ctx.currentText.text = ctx.currentText.text.replace(/<reasoning>[\s\S]*?<\/reasoning>\s*/g, "")
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {

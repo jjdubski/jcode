@@ -228,6 +228,7 @@ export const layer = Layer.effect(
         )
       const cleaned = text
         .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>\s*/g, "")
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line.length > 0)
