@@ -49,7 +49,7 @@ test("epilogue snapshot preserves value through renderer destroy and cleanup", a
 
     // Verify epilogue was set by the component
     expect(exit.epilogue).toContain("Test Session")
-    expect(exit.epilogue).toContain("opencode -s ses_test")
+    expect(exit.epilogue).toContain("jcode -s ses_test")
 
     // Trigger exit — same flow as user pressing exit / ExitProvider callback
     triggerExit()
@@ -59,7 +59,7 @@ test("epilogue snapshot preserves value through renderer destroy and cleanup", a
 
     // The snapshot must preserve the epilogue value
     expect(exit.epilogueSnapshot).toContain("Test Session")
-    expect(exit.epilogueSnapshot).toContain("opencode -s ses_test")
+    expect(exit.epilogueSnapshot).toContain("jcode -s ses_test")
 
     // The original epilogue should be cleared by onCleanup
     expect(exit.epilogue).toBeUndefined()
