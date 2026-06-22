@@ -1,5 +1,5 @@
 const logo = {
-  left: ["     ", "    ▀", "    █", " █__█", " ▀vv█"],
+  left: ["    ▀", "    █", " █__█", " ▀vv█"],
   right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
 }
 
@@ -30,6 +30,7 @@ function wordmark(pad = "") {
 export function sessionEpilogue(input: { title: string; sessionID?: string }) {
   const weak = (text: string) => `${dim}${text.padEnd(10, " ")}${reset}`
   return [
+    "",
     ...wordmark("  "),
     "",
     `  ${weak("Session")}${bold}${input.title}${reset}`,
