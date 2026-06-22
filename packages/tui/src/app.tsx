@@ -175,7 +175,7 @@ function isVersionGreater(left: string, right: string) {
 
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
-  const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
+  const exit = { epilogue: undefined as string | undefined, epilogueSnapshot: undefined as string | undefined, reason: undefined as unknown }
   yield* Effect.scoped(
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
@@ -236,6 +236,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
               exit={(reason) => {
                 if (renderer.isDestroyed) return
                 exit.reason = reason
+                exit.epilogueSnapshot = exit.epilogue
                 destroyRenderer(renderer)
               }}
             >
@@ -341,7 +342,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     win32FlushInputBuffer()
     if (exit.reason !== undefined)
       process.stderr.write((cliErrorMessage(exit.reason) ?? errorFormat(exit.reason)) + "\n")
-    if (exit.epilogue) process.stdout.write(exit.epilogue + "\n")
+    const epilogue = exit.epilogueSnapshot ?? exit.epilogue
+    if (epilogue) process.stdout.write(epilogue + "\n")
   })
 })
 
