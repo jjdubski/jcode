@@ -566,7 +566,7 @@ export function Prompt(props: PromptProps) {
       },
       {
         title: "Move session",
-        desc: "Move the session to another project directory",
+        desc: "Move to another project dir",
         name: "session.move",
         category: "Session",
         slashName: "move",
@@ -593,6 +593,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash",
       "prompt.stash.pop",
       "prompt.stash.list",
+      "prompt.skills",
       "session.interrupt",
       "workspace.set",
       "session.move",
@@ -1147,32 +1148,32 @@ export function Prompt(props: PromptProps) {
         }
       }
 
-      // Deduplicate skill parts to avoid duplicate SKILL pills and injections
-      const seenSendingSkillNames = new Set<string>()
-      const sendingParts = nonTextParts.filter((p) => {
-        if (p.type !== "skill") return true
-        if (seenSendingSkillNames.has(p.name)) return false
-        seenSendingSkillNames.add(p.name)
-        return true
-      })
-
       sdk.client.session
-        .prompt({
-          sessionID,
-          ...selectedModel,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          parts: [
-            ...editorParts,
-            {
-              type: "text",
-              text: inputText,
-            },
-            ...sendingParts,
-          ],
+        .prompt(
+          {
+            sessionID,
+            ...selectedModel,
+            agent: agent.name,
+            model: selectedModel,
+            variant,
+            parts: [
+              ...editorParts,
+              {
+                type: "text",
+                text: inputText,
+              },
+              ...nonTextParts,
+            ],
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => {
+          toast.show({
+            title: "Failed to send prompt",
+            message: errorMessage(error),
+            variant: "error",
+          })
         })
-        .catch(() => {})
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1540,6 +1541,9 @@ export function Prompt(props: PromptProps) {
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
+                      <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
+                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                      </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
                           <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
