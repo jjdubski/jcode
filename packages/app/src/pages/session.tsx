@@ -756,7 +756,7 @@ export default function Page() {
 
   createEffect(
     on(
-      () => sync.data.message[params.id ?? ""],
+      () => sync().data.message[params.id ?? ""],
       (messages) => {
         if (!messages?.length) return
         const agent = local.agent.current()
