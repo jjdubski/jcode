@@ -18,7 +18,6 @@ import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
-import { ProviderV2 } from "@opencode-ai/core/provider"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
@@ -116,18 +115,10 @@ const layer = Layer.effect(
       }
       let aborted = false
 
-      const parse = (e: unknown, providerID?: ProviderV2.ID) =>
+      const parse = (e: unknown) =>
         MessageV2.fromError(e, {
-          providerID: providerID ?? input.model.providerID,
+          providerID: input.model.providerID,
           aborted,
-        })
-
-      // Extracts a parsed error from an Exit value. Returns undefined on success,
-      // so callers should check Exit.isFailure before calling.
-      const parseExitFailure = (result: Exit.Exit<unknown, unknown>, providerID?: ProviderV2.ID) =>
-        Exit.match(result, {
-          onSuccess: () => undefined,
-          onFailure: (cause) => parse(Cause.squash(cause), providerID),
         })
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
@@ -530,7 +521,6 @@ const layer = Layer.effect(
               },
               { text: ctx.currentText.text },
             )).text
-            ctx.currentText.text = ctx.currentText.text.replace(/<reasoning>[\s\S]*?<\/reasoning>\s*/g, "")
             {
               const end = Date.now()
               ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
@@ -641,14 +631,12 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        // Inherits tracing from SessionProcessor.process (inner Effect.fn overhead not needed here).
-        const runStream = (si: LLM.StreamInput, providerID: ProviderV2.ID, maxRetries?: number) =>
-          Effect.gen(function* () {
+        return yield* Effect.gen(function* () {
+          yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
-            ctx.needsCompaction = false
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(si)
+            const stream = llm.stream(streamInput)
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -670,9 +658,8 @@ const layer = Layer.effect(
             ),
             Effect.retry(
               SessionRetry.policy({
-                provider: providerID,
-                maxRetries,
-                parse: (e) => parse(e, providerID),
+                provider: input.model.providerID,
+                parse,
                 set: (info) => {
                   return status.set(ctx.sessionID, {
                     type: "retry",
@@ -684,139 +671,14 @@ const layer = Layer.effect(
                 },
               }),
             ),
+            Effect.catch(halt),
+            Effect.ensuring(cleanup()),
           )
 
-        // backupModels are already filtered for undefined upstream in prompt.ts
-        const backupModels = input.backupModels ?? []
-        const modelErrors: Array<{ providerID: string; modelID: string; error: string }> = []
-
-        // Tries primary + backup models sequentially. Backup models are
-        // attempted one at a time (not in parallel) to avoid duplicate work
-        // and keep state tracking simple. This adds worst-case latency of
-        // (N backups × request time), but backup fallback is an exceptional
-        // path; parallel fan-out would risk burning multiple API limits.
-        const tryBackupModels = (): Effect.Effect<"continue" | "compact" | "stop", never> =>
-          Effect.gen(function* () {
-          // The primary model gets one retry so transient errors (network
-          // blips, rate-limit spikes) don't skip straight to backups. Backup
-          // models also get one retry each.
-          const retries = 1
-          const primaryResult = yield* runStream(streamInput, input.model.providerID, retries).pipe(Effect.exit)
-
-          // Effective model defaults to the primary so that when all
-          // backups fail outright (not with overflow), we revert
-          // modelID/providerID to the primary rather than leaving stale
-          // values from the last failed backup.
-          let effectiveModel: Provider.Model | undefined = input.model
-
-          // Track whether ANY model hit overflow so we only compact as a
-          // last resort when no model can handle the full context.
-          let needsCompaction = ctx.needsCompaction
-
-          // Check if the primary model failed due to context overflow before
-          // attempting backup models — propagation through halt() is bypassed
-          // when using Effect.exit, so we handle it explicitly here.
-          if (Exit.isFailure(primaryResult)) {
-            const parsedError = parseExitFailure(primaryResult)
-            if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
-              needsCompaction = true
-              yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error: parsedError })
-            } else {
-              const primaryModelError = parsedError !== undefined ? errorMessage(parsedError) : "unknown error"
-              modelErrors.push({
-                providerID: streamInput.model.providerID,
-                modelID: streamInput.model.id,
-                error: primaryModelError,
-              })
-              yield* Effect.logWarning("primary model failed, trying backups", {
-                providerID: streamInput.model.providerID,
-                modelID: streamInput.model.id,
-                error: primaryModelError,
-              })
-            }
-          }
-
-          // Primary model succeeded without overflow.
-          // If it failed or needs compaction, try backup models before compacting.
-          let modelSucceeded = Exit.isSuccess(primaryResult) && !ctx.needsCompaction
-
-          if (!modelSucceeded) {
-            for (const bm of backupModels) {
-              ctx.assistantMessage.error = undefined
-              ctx.assistantMessage.modelID = bm.id
-              ctx.assistantMessage.providerID = bm.providerID
-              yield* session.updateMessage(ctx.assistantMessage)
-              const backupInput = { ...streamInput, model: bm }
-              const result = yield* runStream(backupInput, bm.providerID, retries).pipe(Effect.exit)
-              if (Exit.isSuccess(result)) effectiveModel = bm
-              if (Exit.isSuccess(result) && !ctx.needsCompaction) {
-                yield* session.updatePart({
-                  id: PartID.ascending(),
-                  messageID: ctx.assistantMessage.id,
-                  sessionID: ctx.assistantMessage.sessionID,
-                  type: "text",
-                  text: `Used backup model: ${bm.providerID}/${bm.id}\n`,
-                  synthetic: true,
-                  metadata: { muted: true },
-                } satisfies SessionV1.TextPart)
-                modelSucceeded = true
-                needsCompaction = false
-                break
-              }
-              if (ctx.needsCompaction) needsCompaction = true
-              if (Exit.isFailure(result)) {
-                const parsedError = parseExitFailure(result, bm.providerID)
-                if (parsedError !== undefined && SessionV1.ContextOverflowError.isInstance(parsedError)) {
-                  needsCompaction = true
-                }
-                if (parsedError !== undefined && !SessionV1.ContextOverflowError.isInstance(parsedError)) {
-                  const backupModelError = errorMessage(parsedError)
-                  modelErrors.push({
-                    providerID: bm.providerID,
-                    modelID: bm.id,
-                    error: backupModelError,
-                  })
-                  yield* Effect.logWarning("backup model failed", {
-                    providerID: bm.providerID,
-                    modelID: bm.id,
-                    error: backupModelError,
-                  })
-                }
-              }
-            }
-
-            // Revert modelID to the effective model so prompt.ts picks
-            // the right model for compaction instead of a failed backup.
-            if (!modelSucceeded && effectiveModel) {
-              ctx.assistantMessage.modelID = effectiveModel.id
-              ctx.assistantMessage.providerID = effectiveModel.providerID
-              yield* session.updateMessage(ctx.assistantMessage)
-            }
-          }
-
-          if (!modelSucceeded) {
-            if (needsCompaction) return "compact" as const
-            const detail = modelErrors.map((m) => `[${m.providerID}/${m.modelID}] ${m.error}`).join("; ")
-            yield* halt(new Error(`All configured models failed: ${detail}`))
-            return "stop" as const
-          }
-
-          if (ctx.blocked || ctx.assistantMessage.error) return "stop" as const
-          return "continue" as const
+          if (ctx.needsCompaction) return "compact"
+          if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+          return "continue"
         })
-
-        return yield* Effect.gen(function* () {
-          if (backupModels.length > 0) {
-            const result = yield* tryBackupModels()
-            if (result === "continue") return "continue" as const
-            if (result === "compact") return "compact" as const
-            return "stop" as const
-          }
-          yield* runStream(streamInput, input.model.providerID).pipe(Effect.catch(halt))
-          if (ctx.needsCompaction) return "compact" as const
-          if (ctx.blocked || ctx.assistantMessage.error) return "stop" as const
-          return "continue" as const
-        }).pipe(Effect.ensuring(cleanup()))
       })
 
       return {

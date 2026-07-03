@@ -11,13 +11,12 @@ import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 
-import { getProjectAvatarVariant, LayoutRoute, useLayout, type LocalProject } from "@/context/layout"
+import { LayoutRoute, useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
 import { WindowsAppMenu } from "./windows-app-menu"
-import { StatusPopoverV2 } from "./status-popover"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
 import { TitlebarTabStrip } from "@/components/titlebar-tab-strip"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -26,9 +25,6 @@ import { readSessionTabsRemovedDetail, SESSION_TABS_REMOVED_EVENT } from "@/comp
 import { useGlobal } from "@/context/global"
 import { ServerConnection, useServer } from "@/context/server"
 import { tabKey, useTabs } from "@/context/tabs"
-import { displayName, getProjectAvatarSource, projectForSession } from "@/pages/layout/helpers"
-import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
-import { ProjectAvatar } from "@opencode-ai/ui/v2/project-avatar-v2"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 
@@ -58,7 +54,13 @@ const v2TitlebarHeight = 36
 const minTitlebarZoom = 0.25
 const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px each.
 
-export function Titlebar() {
+export type TitlebarUpdate = {
+  version: () => string | undefined
+  installing: () => boolean
+  install: () => void
+}
+
+export function Titlebar(props: { update?: TitlebarUpdate }) {
   const layout = useLayout()
   const platform = usePlatform()
   const command = useCommand()
@@ -119,9 +121,20 @@ export function Titlebar() {
   const canForward = createMemo(() => history.index < history.stack.length - 1)
   const hasProjects = createMemo(() => layout.projects.list().length > 0)
   const nav = createMemo(() => (useV2Titlebar() ? settings.general.showNavigation() : true))
+  const updateState = createMemo<TitlebarUpdatePillState>(() => {
+    const installing = props.update?.installing() ?? false
+    const version = props.update?.version()
+    return {
+      visible: version !== undefined || installing,
+      installing,
+      label: "Update",
+      ariaLabel: language.t("toast.update.action.installRestart"),
+      title: version ? `Update ${version}` : undefined,
+      onInstall: () => props.update?.install(),
+    }
+  })
   const v2RightState = createMemo<TitlebarV2RightState>(() => ({
-    statusVisible: !params.dir && settings.general.showStatus(),
-    statusLabel: language.t("status.popover.trigger"),
+    update: updateState(),
   }))
 
   const back = () => {
@@ -443,7 +456,6 @@ export function Titlebar() {
                 <TitlebarTabStrip
                   tabs={tabsStore}
                   currentTab={currentTab}
-                  activeServerKey={server.key}
                   forceTruncate={tabsAreOverflowing()}
                   onOverflowChange={setTabsAreOverflowing}
                   onNavigate={(tab, el) => {
@@ -646,232 +658,55 @@ export function Titlebar() {
   )
 }
 
+type TitlebarUpdatePillState = {
+  visible: boolean
+  installing: boolean
+  label: string
+  ariaLabel: string
+  title?: string
+  onInstall: () => void
+}
+
 type TitlebarV2RightState = {
-  statusVisible: boolean
-  statusLabel: string
+  update: TitlebarUpdatePillState
 }
 
 function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
   return (
-    <div class="flex shrink-0 items-center justify-end gap-0">
-      <Show when={props.state.statusVisible}>
-        <Tooltip placement="bottom" value={props.state.statusLabel}>
-          <StatusPopoverV2 scope="server" />
-        </Tooltip>
+    <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 overflow-visible">
+      <Show when={props.state.update.visible}>
+        <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
       <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
     </div>
   )
 }
 
-function TabNavItem(props: {
-  ref?: HTMLDivElement
-  href: string
-  server: ServerConnection.Key
-  directory: string
-  sessionId?: string
-  hideClose?: boolean
-  onClose: () => void
-  onNavigate: () => void
-  active?: boolean
-  activeServer: boolean
-  forceTruncate?: boolean
-}) {
-  const closeTab = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    props.onClose()
-  }
-  const global = useGlobal()
-  const serverCtx = createMemo(() => {
-    const conn = global.servers.list().find((item) => ServerConnection.key(item) === props.server)
-    if (conn) return global.ensureServerCtx(conn)
-  })
-  const dirSyncCtx = createMemo(() => serverCtx()?.sync.ensureDirSyncContext(props.directory))
-
-  const [session] = createResource(
-    () => {
-      const ctx = dirSyncCtx()
-      if (!ctx || !props.sessionId) return
-      return [props.sessionId, ctx] as const
-    },
-    async ([sessionId, dirSyncCtx]) => {
-      await dirSyncCtx.session.sync(sessionId).catch(() => {})
-      return dirSyncCtx.session.get(sessionId)
-    },
-    { initialValue: props.sessionId ? dirSyncCtx()?.session.get(props.sessionId) : undefined },
-  )
-
+function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
   return (
-    <div
-      ref={props.ref}
-      class="group relative flex h-7 min-w-24 max-w-60 flex-row items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-[6px] bg-[var(--tab-bg)] px-1.5 [--tab-bg:var(--v2-background-bg-deep)] hover:[--tab-bg:var(--v2-background-bg-layer-02)] data-[active='true']:[--tab-bg:var(--v2-background-bg-layer-02)]"
-      data-active={props.active}
-      onMouseDown={(event) => {
-        if (event.button !== 1) return
-        closeTab(event)
-      }}
-    >
-      <Show when={session.latest}>
-        {(session) => {
-          const project = createMemo(() => projectForSession(session(), serverCtx()?.projects.list() ?? []))
-
-          return (
-            <a
-              href={props.href}
-              onClick={(event) => {
-                event.preventDefault()
-                props.onNavigate()
-              }}
-              class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-faint group-data-[active='true']:text-v2-text-text-base"
-            >
-              <span data-slot="project-avatar-slot">
-                <ProjectTabAvatar
-                  project={project()}
-                  directory={props.directory}
-                  sessionId={session().id}
-                  activeServer={props.activeServer}
-                />
-              </span>
-              <span class="min-w-0 flex-1">{session().title}</span>
-            </a>
-          )
-        }}
-      </Show>
-
-      <div
-        class="absolute not-group-hover:not-group-data-[active=true]:not-data-[truncate=true]:left-52 group-hover:right-0 group-data-[active=true]:right-0 data-[truncate=true]:right-0 inset-y-0 flex flex-row items-center pr-1 py-1 w-8 pl-2"
-        data-truncate={props.forceTruncate}
+    <div class="group relative mr-3 h-5 w-5 shrink-0 rounded-full bg-v2-background-bg-deep transition-[width] duration-150 ease-out hover:z-30 hover:w-[68px] focus-within:z-30 focus-within:w-[68px] motion-reduce:transition-none">
+      <button
+        type="button"
+        class="absolute right-0 top-0 z-10 flex h-5 w-5 items-center justify-end overflow-hidden rounded-full bg-v2-icon-icon-accent/20 text-v2-icon-icon-accent transition-[width,background-color] duration-150 ease-out group-hover:w-[68px] group-hover:bg-[color-mix(in_srgb,var(--v2-icon-icon-accent)_20%,var(--v2-background-bg-deep))] group-focus-within:w-[68px] group-focus-within:bg-[color-mix(in_srgb,var(--v2-icon-icon-accent)_20%,var(--v2-background-bg-deep))] focus-visible:outline-none disabled:opacity-60 motion-reduce:transition-none"
+        onClick={props.state.onInstall}
+        disabled={props.state.installing}
+        aria-busy={props.state.installing}
+        aria-label={props.state.ariaLabel}
       >
-        <div
-          class="absolute inset-0 rounded-r-[6px] bg-(image:--inactive-bg) group-hover:bg-(image:--active-bg) group-data-[active=true]:bg-(image:--active-bg)"
-          style={{
-            "--inactive-bg": "linear-gradient(to right, transparent 0%, var(--tab-bg) 80%)",
-            "--active-bg": "linear-gradient(90deg, transparent 0%, var(--tab-bg) 25%)",
-          }}
-        />
-        <IconButtonV2
-          size="small"
-          variant="ghost-muted"
-          class="opacity-0 group-hover:opacity-100 group-data-[active='true']:opacity-100 z-10"
-          onClick={closeTab}
-          icon={<IconV2 name="xmark-small" />}
-        />
-      </div>
-    </div>
-  )
-}
-
-function ProjectTabAvatar(props: {
-  project?: LocalProject
-  directory: string
-  sessionId: string
-  activeServer: boolean
-}) {
-  const directory = () => props.directory
-  const sessionId = () => props.sessionId
-  const state = useSessionTabAvatarState(directory, sessionId, () => props.activeServer)
-  return (
-    <ProjectAvatar
-      fallback={displayName(props.project ?? { worktree: props.directory })}
-      src={getProjectAvatarSource(props.project?.id, props.project?.icon)}
-      variant={getProjectAvatarVariant(props.project?.icon?.color)}
-      unread={state.unread()}
-    />
-  )
-}
-
-function DraftTabItem(props: {
-  ref?: HTMLDivElement
-  href: string
-  title: string
-  active?: boolean
-  onNavigate: () => void
-  onClose: () => void
-}) {
-  const closeTab = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    props.onClose()
-  }
-  return (
-    <div
-      ref={props.ref}
-      data-active={props.active}
-      class="group relative shrink-0 flex h-7 max-w-60 flex-row items-center gap-1.5 overflow-hidden rounded-[6px] bg-[var(--tab-bg)] pl-1.5 pr-8 whitespace-nowrap [--tab-bg:var(--v2-background-bg-deep)] hover:[--tab-bg:var(--v2-background-bg-layer-02)] data-[active='true']:[--tab-bg:var(--v2-overlay-simple-overlay-pressed)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--v2-border-border-focus)]"
-      onMouseDown={(event) => {
-        if (event.button !== 1) return
-        closeTab(event)
-      }}
-    >
-      <a
-        href={props.href}
-        onClick={(event) => {
-          event.preventDefault()
-          props.onNavigate()
-        }}
-        class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 overflow-hidden text-[13px] font-medium leading-5 text-v2-text-text-faint group-data-[active='true']:text-[var(--v2-text-text-base)]"
-      >
-        <span class="flex size-4 shrink-0 rotate-90 items-center justify-center">
-          <IconV2 name="edit" />
+        <span class="shrink-0 ml-[8px] mr-px text-[11px] text-v2-text-text-accent [font-weight:530] opacity-0 translate-x-2 motion-safe:transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0 motion-reduce:translate-x-0">
+          Update
         </span>
-        <span class="truncate leading-5">{props.title}</span>
-      </a>
-      <div class="absolute right-0 inset-y-0 flex w-7 items-center justify-center">
-        <IconButtonV2
-          size="small"
-          variant="ghost-muted"
-          onMouseDown={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-          }}
-          onClick={closeTab}
-          icon={<IconV2 name="xmark-small" />}
-          aria-label="Close tab"
-        />
-      </div>
-    </div>
-  )
-}
-
-function NewSessionTabItem(props: { ref?: HTMLDivElement; href: string; title: string; onClose: () => void }) {
-  const closeTab = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    props.onClose()
-  }
-  return (
-    <div
-      ref={props.ref}
-      class="group relative shrink-0 flex h-7 max-w-60 flex-row items-center gap-1.5 overflow-hidden rounded-[6px] bg-[var(--v2-overlay-simple-overlay-pressed)] pl-1.5 pr-8 whitespace-nowrap focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--v2-border-border-focus)]"
-      onMouseDown={(event) => {
-        if (event.button !== 1) return
-        closeTab(event)
-      }}
-    >
-      <a
-        href={props.href}
-        aria-current="page"
-        class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 overflow-hidden text-[13px] font-medium leading-5 text-[var(--v2-text-text-base)]"
-      >
-        <span class="flex size-4 shrink-0 rotate-90 items-center justify-center">
-          <IconV2 name="edit" />
+        <span class="flex size-5 shrink-0 items-center justify-center">
+          <Show
+            when={!props.state.installing}
+            fallback={<span data-slot="titlebar-update-loader" aria-hidden="true" />}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 11V3M3.5 7.63128L7 11L10.5 7.63128" stroke="currentColor" />
+            </svg>
+          </Show>
         </span>
-        <span class="truncate leading-5">{props.title}</span>
-      </a>
-      <div class="absolute right-0 inset-y-0 flex w-7 items-center justify-center">
-        <IconButtonV2
-          size="small"
-          variant="ghost-muted"
-          onMouseDown={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-          }}
-          onClick={closeTab}
-          icon={<IconV2 name="xmark-small" />}
-          aria-label="Close tab"
-        />
-      </div>
+      </button>
     </div>
   )
 }

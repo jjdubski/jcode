@@ -42,6 +42,7 @@ import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
+import { DialogDebug } from "./component/dialog-debug"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
@@ -113,6 +114,7 @@ const appBindingCommands = [
   "provider.connect",
   "console.org.switch",
   "opencode.status",
+  "opencode.debug",
   "theme.switch",
   "theme.switch_mode",
   "theme.mode.lock",
@@ -759,6 +761,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "status",
         run: () => {
           dialog.replace(() => <DialogStatus />)
+        },
+        category: "System",
+      },
+      {
+        name: "opencode.debug",
+        title: "View debug info",
+        slashName: "debug",
+        run: () => {
+          dialog.replace(() => <DialogDebug />)
         },
         category: "System",
       },

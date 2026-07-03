@@ -24,13 +24,6 @@ export function Logo() {
           </text>
         )
       }
-      if (char === "v") {
-        return (
-          <text fg={shadow} attributes={attrs} selectable={false}>
-            ▄
-          </text>
-        )
-      }
       if (char === "~") {
         return (
           <text fg={shadow} attributes={attrs} selectable={false}>
