@@ -46,7 +46,6 @@ interface FetchDecompressionError extends Error {
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
 
-
 function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text
   const omitted = text.length - maxChars
@@ -56,10 +55,15 @@ function truncateToolOutput(text: string, maxChars?: number) {
 function unsupportedUrlScheme(url: string): boolean {
   const parsed = URL.parse(url)
   if (!parsed) return true
-  if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:" || parsed.protocol === "file:") return false
+  if (
+    parsed.protocol === "http:" ||
+    parsed.protocol === "https:" ||
+    parsed.protocol === "data:" ||
+    parsed.protocol === "file:"
+  )
+    return false
   return true
 }
-
 
 export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
@@ -427,7 +431,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         .filter((msg) => msg.parts.some((part) => part.type !== "step-start"))
         // Spread creates a wider type than UIMessage; content is added
         // for AI SDK v6 Zod validation. Cast to the target type.
-        .map((msg) => ({ ...msg, content: msg.parts } as unknown as UIMessage)),
+        .map((msg) => ({ ...msg, content: msg.parts }) as unknown as UIMessage),
       {
         //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
         tools,

@@ -1855,9 +1855,7 @@ describe("session.message-v2.unsupportedUrlScheme", () => {
     expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
       {
         role: "user",
-        content: [
-          { type: "file", mediaType: "image/png", filename: "img.png", data: "data:image/png;base64,iVBOR=" },
-        ],
+        content: [{ type: "file", mediaType: "image/png", filename: "img.png", data: "data:image/png;base64,iVBOR=" }],
       },
     ])
   })
@@ -1883,9 +1881,7 @@ describe("session.message-v2.unsupportedUrlScheme", () => {
     expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
       {
         role: "user",
-        content: [
-          { type: "file", mediaType: "image/png", filename: "local.png", data: "file:///home/user/local.png" },
-        ],
+        content: [{ type: "file", mediaType: "image/png", filename: "local.png", data: "file:///home/user/local.png" }],
       },
     ])
   })

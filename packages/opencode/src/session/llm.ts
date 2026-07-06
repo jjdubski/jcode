@@ -321,11 +321,7 @@ const live: Layer.Layer<
           abortSignal: input.abort,
           headers: prepared.headers,
           maxRetries: input.retries ?? 0,
-          messages: ProviderTransform.message(
-            prepared.messages,
-            input.model,
-            prepared.messageTransformOptions,
-          ),
+          messages: ProviderTransform.message(prepared.messages, input.model, prepared.messageTransformOptions),
           model: wrapLanguageModel({
             model: language,
             middleware: [

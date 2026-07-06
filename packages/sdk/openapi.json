@@ -6340,6 +6340,9 @@
                           "$ref": "#/components/schemas/AgentPartInput"
                         },
                         {
+                          "$ref": "#/components/schemas/SkillPartInput"
+                        },
+                        {
                           "$ref": "#/components/schemas/SubtaskPartInput"
                         }
                       ]
@@ -7220,6 +7223,9 @@
                         },
                         {
                           "$ref": "#/components/schemas/AgentPartInput"
+                        },
+                        {
+                          "$ref": "#/components/schemas/SkillPartInput"
                         },
                         {
                           "$ref": "#/components/schemas/SubtaskPartInput"
@@ -17069,6 +17075,50 @@
         "required": ["id", "sessionID", "messageID", "type", "name"],
         "additionalProperties": false
       },
+      "SkillPart": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^prt"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "messageID": {
+            "type": "string",
+            "pattern": "^msg"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["skill"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["value", "start", "end"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "sessionID", "messageID", "type", "name"],
+        "additionalProperties": false
+      },
       "RetryPart": {
         "type": "object",
         "properties": {
@@ -17174,6 +17224,9 @@
           },
           {
             "$ref": "#/components/schemas/AgentPart"
+          },
+          {
+            "$ref": "#/components/schemas/SkillPart"
           },
           {
             "$ref": "#/components/schemas/RetryPart"
@@ -20645,6 +20698,12 @@
           "model": {
             "type": "string"
           },
+          "backupModel": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "variant": {
             "type": "string"
           },
@@ -22526,6 +22585,22 @@
             "required": ["modelID", "providerID"],
             "additionalProperties": false
           },
+          "backupModel": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "modelID": {
+                  "type": "string"
+                },
+                "providerID": {
+                  "type": "string"
+                }
+              },
+              "required": ["modelID", "providerID"],
+              "additionalProperties": false
+            }
+          },
           "variant": {
             "type": "string"
           },
@@ -23136,6 +23211,42 @@
           "type": {
             "type": "string",
             "enum": ["agent"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["value", "start", "end"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["type", "name"],
+        "additionalProperties": false
+      },
+      "SkillPartInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^prt"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["skill"]
           },
           "name": {
             "type": "string"

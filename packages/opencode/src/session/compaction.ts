@@ -331,10 +331,7 @@ const layer = Layer.effect(
       // callers like prompt.ts can pass a backup model override. The
       // compaction agent's configured model is intentionally ignored here
       // in favor of the caller's explicit choice.
-      const model = yield* provider.getModel(
-        userMessage.model.providerID,
-        userMessage.model.modelID,
-      ).pipe(Effect.orDie)
+      const model = yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
 
       // Resolve backup models from the user's agent so compaction falls back
       // to a working model when the primary has exceeded usage limits.
@@ -342,9 +339,7 @@ const layer = Layer.effect(
       const backupModels: Provider.Model[] | undefined = userAgent?.backupModel?.length
         ? (yield* Effect.all(
             userAgent.backupModel.map((bm) =>
-              provider.getModel(bm.providerID, bm.modelID).pipe(
-                Effect.orElseSucceed(() => undefined),
-              ),
+              provider.getModel(bm.providerID, bm.modelID).pipe(Effect.orElseSucceed(() => undefined)),
             ),
           )).filter((m: Provider.Model | undefined): m is Provider.Model => m !== undefined)
         : undefined

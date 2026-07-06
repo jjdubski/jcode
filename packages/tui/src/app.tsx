@@ -1022,7 +1022,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       duration: 5000,
     })
   })
-  
+
   const plugin = createMemo(() => {
     if (!ready()) return
     if (route.data.type !== "plugin") return

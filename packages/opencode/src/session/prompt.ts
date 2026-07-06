@@ -1213,8 +1213,7 @@ const layer = Layer.effect(
                 Effect.map((arr) =>
                   arr.filter(
                     (m): m is NonNullable<typeof m> =>
-                      m !== undefined &&
-                      !(m.providerID === model.providerID && m.id === model.id),
+                      m !== undefined && !(m.providerID === model.providerID && m.id === model.id),
                   ),
                 ),
               )
