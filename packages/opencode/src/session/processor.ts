@@ -113,6 +113,7 @@ const layer = Layer.effect(
         currentText: undefined,
         reasoningMap: {},
       }
+      ctx.backupModels = input.backupModels
       let aborted = false
 
       const parse = (e: unknown) =>
@@ -632,52 +633,113 @@ const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+          const models = [input.model, ...(input.backupModels ?? [])]
+
+          for (let i = 0; i < models.length; i++) {
+            const model = models[i]
+
             ctx.currentText = undefined
             ctx.reasoningMap = {}
+            if (ctx.needsCompaction) return "compact"
+            if (ctx.blocked) return "stop"
+
+            if (i > 0) {
+              ctx.model = model
+              ctx.assistantMessage.error = undefined
+              ctx.assistantMessage.finish = undefined
+              ctx.assistantMessage.providerID = model.providerID
+              ctx.assistantMessage.modelID = model.id
+              yield* session.updateMessage(ctx.assistantMessage)
+            }
+            if (ctx.assistantMessage.time.completed) {
+              ctx.assistantMessage.time.completed = undefined
+            }
+
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
 
-            yield* stream.pipe(
-              Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
-              Stream.runDrain,
+            const exit = yield* Effect.gen(function* () {
+              const stream = llm.stream({ ...streamInput, model })
+
+              yield* stream.pipe(
+                Stream.tap((event) => handleEvent(event)),
+                Stream.takeUntil(() => ctx.needsCompaction),
+                Stream.runDrain,
+              )
+            }).pipe(
+              Effect.onInterrupt(() =>
+                Effect.gen(function* () {
+                  aborted = true
+                  if (!ctx.assistantMessage.error) {
+                    yield* halt(new DOMException("Aborted", "AbortError"))
+                  }
+                }),
+              ),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) => Effect.fail(Cause.squash(cause)),
+              ),
+              Effect.retry(
+                SessionRetry.policy({
+                  provider: model.providerID,
+                  parse,
+                  set: (info) => {
+                    return status.set(ctx.sessionID, {
+                      type: "retry",
+                      attempt: info.attempt,
+                      message: info.message,
+                      action: info.action,
+                      next: info.next,
+                    })
+                  },
+                }),
+              ),
+              Effect.exit,
             )
-          }).pipe(
-            Effect.onInterrupt(() =>
-              Effect.gen(function* () {
-                aborted = true
-                if (!ctx.assistantMessage.error) {
-                  yield* halt(new DOMException("Aborted", "AbortError"))
-                }
-              }),
-            ),
-            Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) => Effect.fail(Cause.squash(cause)),
-            ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  return status.set(ctx.sessionID, {
-                    type: "retry",
-                    attempt: info.attempt,
-                    message: info.message,
-                    action: info.action,
-                    next: info.next,
-                  })
-                },
-              }),
-            ),
-            Effect.catch(halt),
-            Effect.ensuring(cleanup()),
-          )
 
-          if (ctx.needsCompaction) return "compact"
-          if (ctx.blocked || ctx.assistantMessage.error) return "stop"
-          return "continue"
+            if (Exit.isSuccess(exit)) {
+              if (i > 0) {
+                yield* session.updatePart({
+                  id: PartID.ascending(),
+                  messageID: ctx.assistantMessage.id,
+                  sessionID: ctx.assistantMessage.sessionID,
+                  type: "text",
+                  text: `Used backup model: ${model.providerID}/${model.id}\n`,
+                  synthetic: true,
+                  metadata: { muted: true },
+                } satisfies SessionV1.TextPart)
+              }
+              yield* cleanup()
+              if (ctx.needsCompaction) return "compact"
+              if (ctx.blocked) return "stop"
+              return "continue"
+            }
+
+            // Interruptions pass through onInterrupt (which calls halt) →
+            // catchCauseIf → retry → exit. onInterrupt already set the error.
+            if (Cause.hasInterruptsOnly(exit.cause)) {
+              yield* cleanup()
+              return "stop"
+            }
+
+            const error = Cause.squash(exit.cause)
+            const parsed = parse(error)
+            const canRecover =
+              (SessionRetry.isRetriableConnectionError(parsed) ||
+                SessionRetry.isModelUnloadedError(parsed)) &&
+              i < models.length - 1
+            if (!canRecover) {
+              yield* halt(error)
+              yield* cleanup()
+              return "stop"
+            }
+
+            // Recoverable error — reset ctx state before trying next backup model
+            ctx.snapshot = undefined
+            ctx.toolcalls = {}
+            ctx.assistantMessage.time.completed = undefined
+          }
+
+          return "stop"
         })
       })
 

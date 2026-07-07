@@ -71,6 +71,9 @@ export function retryable(error: Err, provider: string): Retryable | undefined {
     const status = error.data.statusCode
     // 5xx errors are transient server failures and should always be retried,
     // even when the provider SDK doesn't explicitly mark them as retryable.
+    // Connection errors (no HTTP status) and "Model unloaded" errors
+    // should fall through to the backup model after 1 retry. The retry
+    // policy handles the cap internally; here we mark them retryable.
     if (!error.data.isRetryable && !(status !== undefined && status >= 500)) return undefined
     if (error.data.responseBody?.includes("FreeUsageLimitError")) return undefined
     if (error.data.responseBody?.includes("GoUsageLimitError")) return undefined
@@ -106,6 +109,27 @@ export function retryable(error: Err, provider: string): Retryable | undefined {
   return undefined
 }
 
+/**
+ * Detects connection-type errors where the HTTP request never reached the server
+ * (no HTTP status code). The AI SDK's `APICallError` with `statusCode: undefined`
+ * and `isRetryable: true` indicates a network/connection failure.
+ */
+export function isRetriableConnectionError(error: Err): boolean {
+  if (!SessionV1.APIError.isInstance(error)) return false
+  return error.data.statusCode === undefined && error.data.isRetryable === true
+}
+
+/**
+ * Detects "Model unloaded" errors from the provider. These are non-recoverable
+ * for the current model — retrying the same model will keep failing — so the
+ * caller should fall through to a backup model instead.
+ */
+export function isModelUnloadedError(error: Err): boolean {
+  if (!SessionV1.APIError.isInstance(error)) return false
+  const msg = error.data.message?.toLowerCase() ?? ""
+  return msg.includes("model unloaded")
+}
+
 function parseJSON(value: unknown) {
   return iife(() => {
     try {
@@ -134,7 +158,12 @@ export function policy(opts: {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
-      if (opts.maxRetries !== undefined && meta.attempt > opts.maxRetries) return Cause.done(meta.attempt)
+
+      // Connection errors and "Model unloaded" errors are capped at 1 retry
+      // so the caller can fall through to a backup model quickly.
+      const cap = isRetriableConnectionError(error) || isModelUnloadedError(error) ? 1 : opts.maxRetries
+      if (cap !== undefined && meta.attempt > cap) return Cause.done(meta.attempt)
+
       return Effect.gen(function* () {
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
         const now = yield* Clock.currentTimeMillis
