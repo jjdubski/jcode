@@ -3,9 +3,9 @@ export * as ConfigMarkdown from "./markdown"
 import matter from "gray-matter"
 export function parse(content: string) {
   try {
-    return matter(content)
-  } catch {
     return matter(sanitize(content))
+  } catch {
+    return matter(content)
   }
 }
 
@@ -29,6 +29,8 @@ export function sanitize(content: string) {
     if (!entry) return [line]
     const value = entry[2].trim()
     if (value === "" || value === ">" || value === "|" || value.startsWith('"') || value.startsWith("'")) return [line]
+    // Quote unquoted hex color codes so YAML doesn't treat # as a comment
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) return [`${entry[1]}: "${value}"`]
     if (!value.includes(":")) return [line]
     return [`${entry[1]}: |-`, `  ${value}`]
   })

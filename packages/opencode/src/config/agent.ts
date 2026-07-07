@@ -1,12 +1,23 @@
 export * as ConfigAgent from "./agent"
 
 import path from "path"
-import { Exit, Schema } from "effect"
+import { Exit, Option, Schema } from "effect"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { ConfigAgentV1 } from "@opencode-ai/core/v1/config/agent"
 import { configEntryNameFromPath } from "./entry-name"
 import * as ConfigMarkdown from "./markdown"
-import { ConfigParse } from "./parse"
+
+function tryParseAgent(name: string, data: Record<string, unknown>, prompt: string) {
+  return Option.getOrUndefined(
+    Schema.decodeUnknownOption(ConfigAgentV1.Info)(
+      { name, ...data, prompt },
+      {
+        errors: "all",
+        propertyOrder: "original",
+      },
+    ),
+  )
+}
 
 export async function load(dir: string) {
   const result: Record<string, ConfigAgentV1.Info> = {}
@@ -20,13 +31,8 @@ export async function load(dir: string) {
     if (!md) continue
 
     const name = configEntryNameFromPath(path.relative(dir, item), ["agent/", "agents/"])
-
-    const config = {
-      name,
-      ...md.data,
-      prompt: md.content.trim(),
-    }
-    result[config.name] = ConfigParse.schema(ConfigAgentV1.Info, config, item)
+    const agent = tryParseAgent(name, md.data, md.content.trim())
+    if (agent) result[agent.name] = agent
   }
   return result
 }

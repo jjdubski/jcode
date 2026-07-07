@@ -40,7 +40,8 @@ export const Plugin = define({
     const fs = yield* FSUtil.Service
     yield* ctx.agent.transform(
       Effect.fn(function* (draft) {
-        const documents = yield* Effect.forEach(yield* config.entries(), (entry) => {
+        const entries = yield* config.entries()
+        const documents = yield* Effect.forEach(entries, (entry) => {
           if (entry.type === "document") return Effect.succeed([entry])
           return Effect.gen(function* () {
             const files = yield* discover(fs, entry.path)
