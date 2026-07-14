@@ -725,7 +725,9 @@ const layer = Layer.effect(
             const parsed = parse(error)
             const canRecover =
               (SessionRetry.isRetriableConnectionError(parsed) ||
-                SessionRetry.isModelUnloadedError(parsed)) &&
+                SessionRetry.isModelUnloadedError(parsed) ||
+                SessionRetry.isRateLimitError(parsed) ||
+                SessionRetry.isInferenceUnavailableError(parsed)) &&
               i < models.length - 1
             if (!canRecover) {
               yield* halt(error)

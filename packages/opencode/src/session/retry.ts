@@ -130,6 +130,46 @@ export function isModelUnloadedError(error: Err): boolean {
   return msg.includes("model unloaded")
 }
 
+/**
+ * Detects temporary inference unavailability errors. Retrying the same model
+ * is unlikely to help, so the caller should fall through to a backup model.
+ */
+export function isInferenceUnavailableError(error: Err): boolean {
+  if (!SessionV1.APIError.isInstance(error)) return false
+  const msg = error.data.message?.toLowerCase() ?? ""
+  return msg.includes("inference is temporarily unavailable")
+}
+
+/**
+ * Detects rate limit errors from the provider (HTTP 429, "rate limit exceeded",
+ * "too many requests", etc.). These indicate the model or API key is being
+ * rate-limited — retrying the same model is unlikely to succeed within a
+ * reasonable timeframe, so the caller should fall through to a backup model.
+ */
+export function isRateLimitError(error: Err): boolean {
+  // HTTP 429 Too Many Requests
+  if (SessionV1.APIError.isInstance(error) && error.data.statusCode === 429) return true
+
+  // Check for rate limit patterns in plain text error messages
+  const msg = isRecord(error.data) ? error.data.message : undefined
+  if (typeof msg === "string") {
+    const lower = msg.toLowerCase()
+    if (
+      lower.includes("rate increased too quickly") ||
+      lower.includes("rate limit") ||
+      lower.includes("too many requests")
+    ) return true
+
+    const json = parseJSON(msg)
+    if (json && typeof json === "object") {
+      if (json.type === "error" && json.error?.type === "too_many_requests") return true
+      if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit")) return true
+    }
+  }
+
+  return false
+}
+
 function parseJSON(value: unknown) {
   return iife(() => {
     try {
@@ -159,9 +199,9 @@ export function policy(opts: {
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
 
-      // Connection errors and "Model unloaded" errors are capped at 1 retry
-      // so the caller can fall through to a backup model quickly.
-      const cap = isRetriableConnectionError(error) || isModelUnloadedError(error) ? 1 : opts.maxRetries
+      // Connection errors, "Model unloaded" errors, and rate limit errors are
+      // capped at 1 retry so the caller can fall through to a backup model quickly.
+      const cap = isRetriableConnectionError(error) || isModelUnloadedError(error) || isRateLimitError(error) || isInferenceUnavailableError(error) ? 1 : opts.maxRetries
       if (cap !== undefined && meta.attempt > cap) return Cause.done(meta.attempt)
 
       return Effect.gen(function* () {
