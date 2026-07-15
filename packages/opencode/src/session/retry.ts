@@ -115,8 +115,17 @@ export function retryable(error: Err, provider: string): Retryable | undefined {
  * and `isRetryable: true` indicates a network/connection failure.
  */
 export function isRetriableConnectionError(error: Err): boolean {
-  if (!SessionV1.APIError.isInstance(error)) return false
-  return error.data.statusCode === undefined && error.data.isRetryable === true
+  // Check on message text first regardless of error type
+  if (SessionV1.APIError.isInstance(error)) {
+    if (error.data.statusCode === undefined && error.data.isRetryable === true) return true
+    const msg = (error.data.message ?? "").toLowerCase()
+    if (msg.includes("cannot connect to api") || msg.includes("unable to connect")) return true
+  }
+  // Also check generic error messages for connection failures
+  const genericMsg = typeof error.data === "object" && error.data !== null
+    ? String((error.data as Record<string, unknown>).message ?? "")
+    : ""
+  return genericMsg.toLowerCase().includes("cannot connect to api") || genericMsg.toLowerCase().includes("unable to connect")
 }
 
 /**
