@@ -122,10 +122,13 @@ export function isRetriableConnectionError(error: Err): boolean {
     if (msg.includes("cannot connect to api") || msg.includes("unable to connect")) return true
   }
   // Also check generic error messages for connection failures
-  const genericMsg = typeof error.data === "object" && error.data !== null
-    ? String((error.data as Record<string, unknown>).message ?? "")
-    : ""
-  return genericMsg.toLowerCase().includes("cannot connect to api") || genericMsg.toLowerCase().includes("unable to connect")
+  const genericMsg =
+    typeof error.data === "object" && error.data !== null
+      ? String((error.data as Record<string, unknown>).message ?? "")
+      : ""
+  return (
+    genericMsg.toLowerCase().includes("cannot connect to api") || genericMsg.toLowerCase().includes("unable to connect")
+  )
 }
 
 /**
@@ -167,12 +170,14 @@ export function isRateLimitError(error: Err): boolean {
       lower.includes("rate increased too quickly") ||
       lower.includes("rate limit") ||
       lower.includes("too many requests")
-    ) return true
+    )
+      return true
 
     const json = parseJSON(msg)
     if (json && typeof json === "object") {
       if (json.type === "error" && json.error?.type === "too_many_requests") return true
-      if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit")) return true
+      if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit"))
+        return true
     }
   }
 
@@ -210,7 +215,13 @@ export function policy(opts: {
 
       // Connection errors, "Model unloaded" errors, and rate limit errors are
       // capped at 1 retry so the caller can fall through to a backup model quickly.
-      const cap = isRetriableConnectionError(error) || isModelUnloadedError(error) || isRateLimitError(error) || isInferenceUnavailableError(error) ? 1 : opts.maxRetries
+      const cap =
+        isRetriableConnectionError(error) ||
+        isModelUnloadedError(error) ||
+        isRateLimitError(error) ||
+        isInferenceUnavailableError(error)
+          ? 1
+          : opts.maxRetries
       if (cap !== undefined && meta.attempt > cap) return Cause.done(meta.attempt)
 
       return Effect.gen(function* () {

@@ -1538,7 +1538,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
+          <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
         </box>
       </Show>
       <Switch>
@@ -2359,6 +2359,14 @@ function Execute(props: ToolProps) {
   const hasRuntimeError = createMemo(() => props.metadata.error === true)
   const outputPreview = createMemo(() => collapseToolOutput(output(), 4, 4 * Math.max(20, ctx.width - 6)).output)
   const showOutput = createMemo(() => output() && hasRuntimeError())
+  const content = createMemo(() => {
+    const lines = ["execute"]
+    for (const call of calls()) {
+      const args = input(call.input ?? {})
+      lines.push(`↳ ${call.tool}${args ? ` ${args}` : ""}${call.status === "error" ? " (failed)" : ""}`)
+    }
+    return lines.join("\n")
+  })
 
   return (
     <>
@@ -2370,22 +2378,8 @@ function Execute(props: ToolProps) {
         complete={true}
         part={props.part}
       >
-        execute
+        {content()}
       </InlineTool>
-      <For each={calls()}>
-        {(call) => {
-          const args = input(call.input ?? {})
-          return (
-            <box paddingLeft={3}>
-              <text paddingLeft={3} fg={call.status === "error" ? theme.error : theme.textMuted}>
-                ↳ {call.tool}
-                {args ? ` ${args}` : ""}
-                {call.status === "error" ? " (failed)" : ""}
-              </text>
-            </box>
-          )
-        }}
-      </For>
       <Show when={showOutput()}>
         <box paddingLeft={3}>
           <For each={outputPreview().split("\n")}>
