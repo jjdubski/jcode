@@ -674,6 +674,7 @@ const layer = Layer.effect(
                   if (!ctx.assistantMessage.error) {
                     yield* halt(new DOMException("Aborted", "AbortError"))
                   }
+                  yield* cleanup()
                 }),
               ),
               Effect.catchCauseIf(
@@ -734,6 +735,7 @@ const layer = Layer.effect(
             if (!canRecover) {
               yield* halt(error)
               yield* cleanup()
+              if (ctx.needsCompaction) return "compact"
               return "stop"
             }
 

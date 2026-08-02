@@ -23,6 +23,7 @@ function apiError(headers?: Record<string, string>): SessionV1.APIError {
     new SessionV1.APIError({
       message: "boom",
       isRetryable: true,
+      statusCode: 500,
       responseHeaders: headers,
     }).toObject(),
   )
