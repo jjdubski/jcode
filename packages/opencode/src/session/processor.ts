@@ -666,6 +666,7 @@ const layer = Layer.effect(
                 Stream.tap((event) => handleEvent(event)),
                 Stream.takeUntil(() => ctx.needsCompaction),
                 Stream.runDrain,
+                Effect.timeout("120 seconds"),
               )
             }).pipe(
               Effect.onInterrupt(() =>
@@ -730,10 +731,17 @@ const layer = Layer.effect(
               (SessionRetry.isRetriableConnectionError(parsed) ||
                 SessionRetry.isModelUnloadedError(parsed) ||
                 SessionRetry.isRateLimitError(parsed) ||
-                SessionRetry.isInferenceUnavailableError(parsed)) &&
+                SessionRetry.isInferenceUnavailableError(parsed) ||
+                // TimeoutError parses to UnknownError via MessageV2.fromError, so
+                // it must be checked on the raw squashed cause, not the parsed error.
+                Cause.isTimeoutError(error)) &&
               i < models.length - 1
             if (!canRecover) {
-              yield* halt(error)
+              yield* halt(
+                Cause.isTimeoutError(error)
+                  ? new Error("Stream timed out after 120 seconds — the model did not respond")
+                  : error,
+              )
               yield* cleanup()
               if (ctx.needsCompaction) return "compact"
               return "stop"
