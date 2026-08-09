@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Layer, Context, Ref, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -28,6 +28,12 @@ import { Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
+
+// Timeout for the model to produce output (text, reasoning, tool calls, or step
+// boundaries). Tool execution is excluded: the watchdog pauses while a tool is
+// running so long-running tools (e.g. the task tool waiting on a subagent) are
+// not killed by the model response timeout.
+const STREAM_TIMEOUT_MS = 120_000
 
 export interface Handle {
   readonly message: SessionV1.Assistant
@@ -73,6 +79,11 @@ interface ProcessorContext extends Input {
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
+  // Watchdog state: lastActivity tracks the last event timestamp (any LLM event
+  // indicates the model or a tool made progress), and toolExecuting pauses the
+  // timeout while a tool call runs (between tool-call and tool-result/error).
+  lastActivity: Ref.Ref<number>
+  toolExecuting: Ref.Ref<boolean>
 }
 
 type StreamEvent = LLMEvent
@@ -112,6 +123,8 @@ const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         reasoningMap: {},
+        lastActivity: yield* Ref.make(0),
+        toolExecuting: yield* Ref.make(false),
       }
       ctx.backupModels = input.backupModels
       let aborted = false
@@ -278,6 +291,10 @@ const layer = Layer.effect(
       }
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        // Any LLM event indicates progress (model output or tool output), so it
+        // resets the watchdog's inactivity window.
+        yield* Ref.set(ctx.lastActivity, yield* Clock.currentTimeMillis)
+
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
@@ -334,6 +351,10 @@ const layer = Layer.effect(
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
             }
+            // Tool execution begins after the model finishes emitting the tool
+            // call. Pause the watchdog so long-running tools (e.g. the task tool
+            // waiting on a subagent) aren't killed by the model response timeout.
+            yield* Ref.set(ctx.toolExecuting, true)
             yield* ensureToolCall(value)
             const input = isRecord(value.input) ? value.input : { value: value.input }
             yield* updateToolCall(value.id, (match) => ({
@@ -383,6 +404,8 @@ const layer = Layer.effect(
           }
 
           case "tool-result": {
+            // Tool execution finished; resume the watchdog.
+            yield* Ref.set(ctx.toolExecuting, false)
             const toolCall = yield* readToolCall(value.id)
             if (!toolCall && value.result.type === "error") return
             if (value.result.type === "error") {
@@ -416,6 +439,8 @@ const layer = Layer.effect(
           }
 
           case "tool-error": {
+            // Tool execution failed; resume the watchdog.
+            yield* Ref.set(ctx.toolExecuting, false)
             yield* failToolCall(value.id, value.error ?? new Error(value.message))
             return
           }
@@ -634,6 +659,11 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
+        // Reset watchdog state per process() call. lastActivity seeds to now so
+        // a stream that hangs before emitting any event still times out.
+        ctx.lastActivity = yield* Ref.make(yield* Clock.currentTimeMillis)
+        ctx.toolExecuting = yield* Ref.make(false)
+
         return yield* Effect.gen(function* () {
           const models = [input.model, ...(input.backupModels ?? [])]
 
@@ -662,11 +692,30 @@ const layer = Layer.effect(
             const exit = yield* Effect.gen(function* () {
               const stream = llm.stream({ ...streamInput, model })
 
-              yield* stream.pipe(
-                Stream.tap((event) => handleEvent(event)),
-                Stream.takeUntil(() => ctx.needsCompaction),
-                Stream.runDrain,
-                Effect.timeout("120 seconds"),
+              // Watchdog: fails with a TimeoutError when the model has produced
+              // no output for STREAM_TIMEOUT_MS while no tool is executing.
+              // Tool execution (e.g. the task tool waiting on a subagent) pauses
+              // the watchdog via ctx.toolExecuting, so long tool runs don't count
+              // against the model response timeout.
+              const watchdog = Effect.gen(function* () {
+                while (true) {
+                  yield* Effect.sleep("250 millis")
+                  if (yield* Ref.get(ctx.toolExecuting)) continue
+                  const now = yield* Clock.currentTimeMillis
+                  const last = yield* Ref.get(ctx.lastActivity)
+                  if (now - last >= STREAM_TIMEOUT_MS) {
+                    yield* Effect.fail(new Cause.TimeoutError("Stream timed out"))
+                  }
+                }
+              })
+
+              yield* Effect.raceFirst(
+                stream.pipe(
+                  Stream.tap((event) => handleEvent(event)),
+                  Stream.takeUntil(() => ctx.needsCompaction),
+                  Stream.runDrain,
+                ),
+                watchdog,
               )
             }).pipe(
               Effect.onInterrupt(() =>
