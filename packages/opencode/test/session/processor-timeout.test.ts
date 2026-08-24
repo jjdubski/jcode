@@ -1,11 +1,13 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import type { Agent } from "../../src/agent/agent"
 import { Provider } from "@/provider/provider"
+import { Permission } from "@/permission"
 
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
@@ -15,7 +17,7 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { provideTmpdirInstance } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -147,6 +149,7 @@ const root = LayerNode.group([
   EventV2Bridge.node,
   SessionStatus.node,
   CrossSpawnSpawner.node,
+  Permission.node,
 ])
 const replacements = [
   [SessionSummary.node, summary],
@@ -257,6 +260,86 @@ describe("session.processor timeout recovery", () => {
           expect(handle.message.error?.data).toMatchObject({
             message: "Stream timed out after 120 seconds — the model did not respond",
           })
+        }),
+      { config: cfg },
+    ),
+  )
+
+  it.effect("does not time out while waiting for a permission reply", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const { processors, session, provider } = yield* boot()
+          const permission = yield* Permission.Service
+          const chat = yield* session.create({})
+          const parent = yield* user(chat.id, "hi")
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+          })
+
+          // Raise a pending permission request for this session, simulating the
+          // user being asked Allow/Always/Reject. The ask blocks until replied.
+          const ask = yield* permission
+            .ask({
+              sessionID: chat.id,
+              permission: "bash",
+              patterns: ["*"],
+              always: ["*"],
+              metadata: { command: "sleep 1" },
+              ruleset: [],
+            })
+            .pipe(Effect.forkChild)
+
+          const requestID = yield* pollWithTimeout(
+            Effect.gen(function* () {
+              // Advance the TestClock so the poll sleep and the forked ask
+              // fiber can make progress under it.effect.
+              yield* TestClock.adjust("50 millis")
+              return (yield* permission.list()).find((r) => r.sessionID === chat.id)?.id
+            }),
+            "permission request never became pending",
+          )
+
+          const run = yield* handle
+            .process({
+              user: {
+                id: parent.id,
+                sessionID: chat.id,
+                role: "user",
+                time: parent.time,
+                agent: parent.agent,
+                model: { providerID: ref.providerID, modelID: ref.modelID },
+              } satisfies SessionV1.User,
+              sessionID: chat.id,
+              model: mdl,
+              agent: agent(),
+              system: [],
+              messages: [{ role: "user", content: "hi" }],
+              tools: {},
+            })
+            .pipe(Effect.forkChild)
+
+          // Past the timeout, but the pending permission must pause the watchdog.
+          yield* TestClock.adjust("121 seconds")
+          expect(run.pollUnsafe()).toBeUndefined()
+
+          // Reply to clear the pending request, then advance again: the watchdog
+          // resumes and stops the hung stream.
+          yield* permission.reply({ requestID, reply: "once" })
+          yield* TestClock.adjust("121 seconds")
+          const exit = yield* Fiber.await(run)
+          expect(Exit.isSuccess(exit)).toBe(true)
+          if (!Exit.isSuccess(exit)) return
+          expect(exit.value).toBe("stop")
+          expect(handle.message.error?.data).toMatchObject({
+            message: "Stream timed out after 120 seconds — the model did not respond",
+          })
+
+          yield* Fiber.interrupt(ask)
         }),
       { config: cfg },
     ),
