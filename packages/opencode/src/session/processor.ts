@@ -797,6 +797,7 @@ const layer = Layer.effect(
               (SessionRetry.isRetriableConnectionError(parsed) ||
                 SessionRetry.isModelUnloadedError(parsed) ||
                 SessionRetry.isRateLimitError(parsed) ||
+                SessionRetry.isUsageLimitError(parsed) ||
                 SessionRetry.isInferenceUnavailableError(parsed) ||
                 // TimeoutError parses to UnknownError via MessageV2.fromError, so
                 // it must be checked on the raw squashed cause, not the parsed error.

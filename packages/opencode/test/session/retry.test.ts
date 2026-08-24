@@ -499,6 +499,44 @@ describe("session.retry.retryable", () => {
   })
 })
 
+describe("session.retry.isUsageLimitError", () => {
+  function usageError(type: string) {
+    return Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Usage exceeded",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          type: "error",
+          error: { type, message: "Usage exceeded" },
+        }),
+      }).toObject(),
+    )
+  }
+
+  test.each(["FreeUsageLimitError", "GoUsageLimitError", "BlackUsageLimitError"])(
+    "detects %s",
+    (type) => {
+      expect(SessionRetry.isUsageLimitError(usageError(type))).toBe(true)
+    },
+  )
+
+  test("returns false for plain rate limit errors", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Too many requests",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          type: "error",
+          error: { type: "rate_limit_exceeded", message: "Too many requests" },
+        }),
+      }).toObject(),
+    )
+    expect(SessionRetry.isUsageLimitError(error)).toBe(false)
+  })
+})
+
 describe("session.message-v2.fromError", () => {
   test.concurrent(
     "converts ECONNRESET socket errors to retryable APIError",

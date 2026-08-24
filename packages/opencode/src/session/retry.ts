@@ -243,6 +243,22 @@ export function isRateLimitError(error: Err): boolean {
   return false
 }
 
+/**
+ * Detects usage limit errors from the provider (free tier, Go, or account
+ * balance limits). These indicate the account has exhausted its usage
+ * allowance — retrying the same model will not help, so the caller should fall
+ * through to a backup model immediately.
+ */
+export function isUsageLimitError(error: Err): boolean {
+  if (!SessionV1.APIError.isInstance(error)) return false
+  const body = error.data.responseBody ?? ""
+  return (
+    body.includes("FreeUsageLimitError") ||
+    body.includes("GoUsageLimitError") ||
+    body.includes("BlackUsageLimitError")
+  )
+}
+
 function parseJSON(value: unknown) {
   return iife(() => {
     try {
@@ -274,12 +290,15 @@ export function policy(opts: {
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
 
       // Connection errors, "Model unloaded" errors, and rate limit errors are
-      // capped at 1 retry so the caller can fall through to a backup model quickly.
-      const cap =
-        isRetriableConnectionError(error) ||
-        isModelUnloadedError(error) ||
-        isRateLimitError(error) ||
-        isInferenceUnavailableError(error)
+      // capped at 1 retry so the caller can fall through to a backup model
+      // quickly. Usage limit errors are not retried at all — the caller should
+      // switch to a backup model immediately.
+      const cap = isUsageLimitError(error)
+        ? 0
+        : isRetriableConnectionError(error) ||
+            isModelUnloadedError(error) ||
+            isRateLimitError(error) ||
+            isInferenceUnavailableError(error)
           ? 1
           : opts.maxRetries
       if (cap !== undefined && meta.attempt > cap) return Cause.done(meta.attempt)
