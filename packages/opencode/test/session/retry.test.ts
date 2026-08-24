@@ -36,8 +36,16 @@ function wrap(message: unknown): ReturnType<NamedError["toObject"]> {
 describe("session.retry.delay", () => {
   test("caps delay at 30 seconds when headers missing", () => {
     const error = apiError()
-    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error))
+    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error, 0))
     expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
+  })
+
+  test("adds jitter to exponential delays", () => {
+    const error = apiError()
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 1)).toBe(2500)
+    expect(SessionRetry.delay(4, error, 1)).toBe(20000)
+    expect(SessionRetry.delay(5, error, 1)).toBe(30000)
   })
 
   test("prefers retry-after-ms when shorter than exponential", () => {
@@ -60,18 +68,18 @@ describe("session.retry.delay", () => {
 
   test("ignores invalid retry hints", () => {
     const error = apiError({ "retry-after": "not-a-number" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("ignores malformed date retry hints", () => {
     const error = apiError({ "retry-after": "Invalid Date String" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("ignores past date retry hints", () => {
     const pastDate = new Date(Date.now() - 5000).toUTCString()
     const error = apiError({ "retry-after": pastDate })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("uses retry-after values even when exceeding 10 minutes with headers", () => {
@@ -187,17 +195,45 @@ describe("session.retry.delay", () => {
       expect(setCallCount).toBe(5)
     }),
   )
+
+  it.instance("policy stops after five retries", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+        }),
+      )
+
+      yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_RETRIES + 1 }), () =>
+        Effect.ignore(step(error)),
+      )
+
+      expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
+    }),
+  )
 })
 
 describe("session.retry.retryable", () => {
-  test("maps too_many_requests json messages", () => {
+  test("retries serialized too_many_requests messages", () => {
     const error = wrap(JSON.stringify({ type: "error", error: { type: "too_many_requests" } }))
     expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: "Too Many Requests" })
   })
 
-  test("maps overloaded provider codes", () => {
+  test("retries serialized overloaded provider codes", () => {
     const error = wrap(JSON.stringify({ code: "resource_exhausted" }))
     expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: "Provider is overloaded" })
+  })
+
+  test("retries serialized rate_limit messages", () => {
+    const message = JSON.stringify({ type: "error", error: { code: "rate_limit_exceeded" } })
+    expect(SessionRetry.retryable(wrap(message), retryProvider)).toEqual({ message })
   })
 
   test("does not retry unknown json messages", () => {
@@ -233,6 +269,51 @@ describe("session.retry.retryable", () => {
     const msg = "Too many requests, please slow down"
     const error = wrap(msg)
     expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: msg })
+  })
+
+  test.each([
+    "Internal server error",
+    "internal error",
+    "server-error",
+    "Provider returned error",
+    "provider-returned-error",
+    "terminated",
+    "fetch failed",
+    "network error",
+    "network-error",
+    "network_error",
+    "connection refused",
+    "connect ECONNREFUSED",
+    "request ETIMEDOUT",
+    "failed to fetch",
+    "EAI_AGAIN",
+    "response timed out",
+    "Please retry your request",
+    "try your request again",
+    "Please try again in a few minutes",
+    "The model is currently at capacity due to high demand",
+    "The service is temporarily at capacity",
+    "upstream returned status 524",
+  ])("retries matching API error text: %s", (message) => {
+    expect(SessionRetry.retryable(wrap(message), retryProvider)).toEqual({ message })
+  })
+
+  test("retries hyphenated service-unavailable errors", () => {
+    expect(SessionRetry.retryable(wrap("service-unavailable"), retryProvider)).toEqual({
+      message: "Provider is overloaded",
+    })
+  })
+
+  test("matches retryable API response bodies", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Request failed",
+        isRetryable: false,
+        statusCode: 400,
+        responseBody: JSON.stringify({ error: { message: "upstream connection refused" } }),
+      }).toObject(),
+    )
+    expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: "Request failed" })
   })
 
   test("retries transport timeout errors", () => {
@@ -339,7 +420,17 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode")).toBeUndefined()
+    expect(SessionRetry.retryable(error, "opencode")).toEqual({
+      message: SessionRetry.GO_UPSELL_MESSAGE,
+      action: {
+        reason: "free_tier_limit",
+        provider: "opencode",
+        title: "Free limit reached",
+        message: "Subscribe to OpenCode Go for reliable access to the best open-source models for $10/month.",
+        label: "subscribe",
+        link: SessionRetry.GO_UPSELL_URL,
+      },
+    })
   })
 
   test("maps Go subscription limits to workspace PAYG upsell", () => {
@@ -365,7 +456,19 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode-go")).toBeUndefined()
+    expect(SessionRetry.retryable(error, "opencode-go")).toEqual({
+      message:
+        "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance - https://opencode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
+      action: {
+        reason: "account_rate_limit",
+        provider: "opencode-go",
+        title: "Go limit reached",
+        message:
+          "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance",
+        label: "open settings",
+        link: "https://opencode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
+      },
+    })
   })
 
   test("maps Go subscription limits without limit metadata", () => {
@@ -390,7 +493,9 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "opencode-go")).toBeUndefined()
+    expect(SessionRetry.retryable(error, "opencode-go")?.action?.message).toBe(
+      "Usage limit reached. It will reset in 15 minutes. To continue using this model now, enable usage from your available balance",
+    )
   })
 })
 
