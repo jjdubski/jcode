@@ -91,6 +91,7 @@ export function retryable(error: Err, provider: string): Retryable | undefined {
     if (
       !error.data.isRetryable &&
       !(status !== undefined && status >= 500) &&
+      !isModelRequestError(error) &&
       !matchesRetryableMessage(error.data.message) &&
       !matchesRetryableMessage(error.data.responseBody)
     )
@@ -212,6 +213,17 @@ export function isInferenceUnavailableError(error: Err): boolean {
 }
 
 /**
+ * Detects the provider's structured 400 response for an unavailable model.
+ * Other 400 responses remain non-retryable because they usually indicate an
+ * invalid request that will not be fixed by repeating it or changing models.
+ */
+export function isModelRequestError(error: Err): boolean {
+  if (!SessionV1.APIError.isInstance(error) || error.data.statusCode !== 400) return false
+  const body = parseJSON(error.data.responseBody)
+  return isRecord(body) && body.object === "error" && typeof body.model === "string"
+}
+
+/**
  * Detects rate limit errors from the provider (HTTP 429, "rate limit exceeded",
  * "too many requests", etc.). These indicate the model or API key is being
  * rate-limited — retrying the same model is unlikely to succeed within a
@@ -285,20 +297,22 @@ export function policy(opts: {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
-      const retry = retryable(error, opts.provider)
+      const retry = Cause.isTimeoutError(meta.input) ? { message: "Stream timed out" } : retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
 
-      // Connection errors, "Model unloaded" errors, and rate limit errors are
-      // capped at 1 retry so the caller can fall through to a backup model
-      // quickly. Usage limit errors are not retried at all — the caller should
-      // switch to a backup model immediately.
+      // Connection errors, model availability errors, rate limits, and stream
+      // timeouts are capped at 1 retry so the caller can fall through to a
+      // backup model quickly. Usage limit errors are not retried at all — the
+      // caller should switch to a backup model immediately.
       const cap = isUsageLimitError(error)
         ? 0
         : isRetriableConnectionError(error) ||
             isModelUnloadedError(error) ||
             isRateLimitError(error) ||
-            isInferenceUnavailableError(error)
+            isInferenceUnavailableError(error) ||
+            isModelRequestError(error) ||
+            Cause.isTimeoutError(meta.input)
           ? 1
           : opts.maxRetries
       if (cap !== undefined && meta.attempt > cap) return Cause.done(meta.attempt)

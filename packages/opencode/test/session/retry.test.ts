@@ -4,7 +4,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Schedule, Schema } from "effect"
+import { Cause, Effect, Schedule, Schema } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -170,6 +170,29 @@ describe("session.retry.delay", () => {
 
       // Second call (attempt 2): meta.attempt (2) > maxRetries (1), stops — set() not called
       yield* step(error).pipe(Effect.exit)
+      expect(setCallCount).toBe(1)
+    }),
+  )
+
+  it.instance("policy retries stream timeouts once", () =>
+    Effect.gen(function* () {
+      let setCallCount = 0
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: () => wrap("Stream timed out"),
+          set: (info) =>
+            Effect.sync(() => {
+              setCallCount++
+              expect(info.message).toBe("Stream timed out")
+            }),
+        }),
+      )
+      const error = new Cause.TimeoutError("Stream timed out")
+
+      yield* step(error).pipe(Effect.exit)
+      yield* step(error).pipe(Effect.exit)
+
       expect(setCallCount).toBe(1)
     }),
   )
@@ -390,6 +413,36 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
+    expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
+  })
+
+  test("retries structured unavailable-model 400 errors", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: 'Bad Request: {"object":"error","model":"deepseek-v4-flash"}',
+        isRetryable: false,
+        statusCode: 400,
+        responseBody: JSON.stringify({ object: "error", model: "deepseek-v4-flash" }),
+      }).toObject(),
+    )
+
+    expect(SessionRetry.isModelRequestError(error)).toBe(true)
+    expect(SessionRetry.retryable(error, retryProvider)).toEqual({
+      message: 'Bad Request: {"object":"error","model":"deepseek-v4-flash"}',
+    })
+  })
+
+  test("does not classify arbitrary bad requests as model errors", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Bad Request",
+        isRetryable: false,
+        statusCode: 400,
+        responseBody: JSON.stringify({ error: "invalid_prompt" }),
+      }).toObject(),
+    )
+
+    expect(SessionRetry.isModelRequestError(error)).toBe(false)
     expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
   })
 

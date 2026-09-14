@@ -185,7 +185,7 @@ const boot = Effect.fn("test.boot")(function* () {
 })
 
 // Runs the processor against a hanging primary model, advancing the TestClock
-// past the 120s stream timeout so the Effect.timeout actually fires.
+// past the primary timeout and its one retry so fallback handling can run.
 const runWithTimeout = Effect.fn("test.runWithTimeout")(function* (
   root: string,
   backupModels?: Provider.Model[],
@@ -219,7 +219,7 @@ const runWithTimeout = Effect.fn("test.runWithTimeout")(function* (
       tools: {},
     })
     .pipe(Effect.forkChild)
-  yield* TestClock.adjust("121 seconds")
+  yield* TestClock.adjust("242 seconds")
   const exit = yield* Fiber.await(run)
   return { exit, handle }
 })
@@ -327,10 +327,10 @@ describe("session.processor timeout recovery", () => {
           yield* TestClock.adjust("121 seconds")
           expect(run.pollUnsafe()).toBeUndefined()
 
-          // Reply to clear the pending request, then advance again: the watchdog
-          // resumes and stops the hung stream.
+          // Reply to clear the pending request, then advance through the initial
+          // timeout and one retry: the watchdog resumes and stops the hung stream.
           yield* permission.reply({ requestID, reply: "once" })
-          yield* TestClock.adjust("121 seconds")
+          yield* TestClock.adjust("242 seconds")
           const exit = yield* Fiber.await(run)
           expect(Exit.isSuccess(exit)).toBe(true)
           if (!Exit.isSuccess(exit)) return

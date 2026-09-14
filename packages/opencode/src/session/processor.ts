@@ -690,6 +690,9 @@ const layer = Layer.effect(
 
             ctx.currentText = undefined
             ctx.reasoningMap = {}
+            // A retry starts a fresh model request and gets its own response
+            // timeout budget rather than inheriting the previous attempt's.
+            yield* Ref.set(ctx.lastActivity, yield* Clock.currentTimeMillis)
             if (ctx.needsCompaction) return "compact"
             if (ctx.blocked) return "stop"
 
@@ -813,6 +816,7 @@ const layer = Layer.effect(
                 SessionRetry.isRateLimitError(parsed) ||
                 SessionRetry.isUsageLimitError(parsed) ||
                 SessionRetry.isInferenceUnavailableError(parsed) ||
+                SessionRetry.isModelRequestError(parsed) ||
                 // TimeoutError parses to UnknownError via MessageV2.fromError, so
                 // it must be checked on the raw squashed cause, not the parsed error.
                 Cause.isTimeoutError(error)) &&
