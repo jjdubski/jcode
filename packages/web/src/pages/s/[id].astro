@@ -1,7 +1,7 @@
 ---
 import { Base64 } from "js-base64"
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro"
-import type { Session } from "jcode/session/index"
+import type { SessionV1 } from "@opencode/schema/session-v1"
 import config from "../../../config.mjs"
 import Share from "../../components/Share.tsx"
 
@@ -59,9 +59,6 @@ const messages = {
   attachment: tx("share.attachment"),
   thinking: tx("share.thinking"),
   thinking_pending: tx("share.thinking_pending"),
-  creating_plan: tx("share.creating_plan"),
-  completing_plan: tx("share.completing_plan"),
-  updating_plan: tx("share.updating_plan"),
   match_one: tx("share.match_one"),
   match_other: tx("share.match_other"),
   result_one: tx("share.result_one"),
@@ -72,7 +69,7 @@ const messages = {
 const id = Astro.params.id || ""
 const res = await fetch(`${apiUrl}/share_data?id=${id}`)
 const data = (await res.json()) as {
-  info?: Session.Info
+  info?: typeof SessionV1.SessionInfo.Encoded
   messages: Record<string, { role?: string; modelID?: string }>
 }
 
@@ -94,7 +91,7 @@ for (const d of Object.values(data.messages)) {
 
 const encodedTitle = encodeURIComponent(
   Base64.encode(
-    encodeURIComponent(data.info.title.substring(0, 700)),
+    encodeURIComponent((data.info.title ?? "").substring(0, 700)),
   ),
 )
 
@@ -111,7 +108,7 @@ const ogImage = `${config.socialCard}/opencode-share/${encodedTitle}.png?model=$
 <StarlightPage
   hasSidebar={false}
   frontmatter={{
-    title: data.info.title,
+    title: data.info.title ?? "",
     pagefind: false,
     template: "splash",
     tableOfContents: false,

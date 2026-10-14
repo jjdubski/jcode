@@ -5,12 +5,11 @@ import { IconArrowDown } from "./icons"
 import { IconOpencode } from "./icons/custom"
 import { ShareI18nProvider, formatCurrency, formatNumber, normalizeLocale } from "./share/common"
 import styles from "./share.module.css"
-import type { MessageV2 } from "jcode/session/message-v2"
-import type { Message } from "jcode/session/message"
-import type { Session } from "jcode/session/index"
+import type { SessionV1 } from "@opencode/schema/session-v1"
+import type { LegacyMessage } from "./share/legacy"
 import { Part, ProviderIcon } from "./share/part"
 
-type MessageWithParts = MessageV2.Info & { parts: MessageV2.Part[] }
+type MessageWithParts = typeof SessionV1.Info.Encoded & { parts: (typeof SessionV1.Part.Encoded)[] }
 
 type Status = "disconnected" | "connecting" | "connected" | "error" | "reconnecting"
 
@@ -41,7 +40,7 @@ function getStatusText(status: [Status, string?], messages: Record<string, strin
 export default function Share(props: {
   id: string
   api: string
-  info: Session.Info
+  info: typeof SessionV1.SessionInfo.Encoded
   messages: { locale: string } & Record<string, string>
 }) {
   let lastScrollY = 0
@@ -58,7 +57,7 @@ export default function Share(props: {
   const [isNearBottom, setIsNearBottom] = createSignal(false)
 
   const [store, setStore] = createStore<{
-    info?: Session.Info
+    info?: typeof SessionV1.SessionInfo.Encoded
     messages: Record<string, MessageWithParts>
   }>({
     info: {
@@ -500,7 +499,7 @@ export default function Share(props: {
   )
 }
 
-export function fromV1(v1: Message.Info): MessageWithParts {
+export function fromV1(v1: LegacyMessage): MessageWithParts {
   if (v1.role === "assistant") {
     return {
       id: v1.id,
@@ -528,7 +527,7 @@ export function fromV1(v1: Message.Info): MessageWithParts {
       providerID: v1.metadata.assistant!.providerID,
       mode: "build",
       error: v1.metadata.error,
-      parts: v1.parts.flatMap((part, index): MessageV2.Part[] => {
+      parts: v1.parts.flatMap((part, index): (typeof SessionV1.Part.Encoded)[] => {
         const base = {
           id: index.toString(),
           messageID: v1.id,
@@ -611,7 +610,7 @@ export function fromV1(v1: Message.Info): MessageWithParts {
       time: {
         created: v1.metadata.time.created,
       },
-      parts: v1.parts.flatMap((part, index): MessageV2.Part[] => {
+      parts: v1.parts.flatMap((part, index): (typeof SessionV1.Part.Encoded)[] => {
         const base = {
           id: index.toString(),
           messageID: v1.id,

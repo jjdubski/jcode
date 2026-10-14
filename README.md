@@ -5,6 +5,7 @@
     </picture>
   </a>
 </p>
+
 <p align="center">An open source AI coding agent (forked from opencode with some customizations).</p>
 
 [![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
@@ -15,6 +16,24 @@
 
 Clone the repo then follow:
 <a href="jcodeInstall.md">Install README</a>
+
+### Fork features
+
+- Alphabetically ordered skills, with inline `$skill` autocomplete alongside `@` references.
+- The custom jcode logo and `jcode` command.
+- Ordered per-agent backup models, including model variants:
+
+```jsonc
+{
+  "agents": {
+    "build": {
+      "backupModel": ["openai/gpt-6-luna#high", "opencode/big-pickle"],
+    },
+  },
+}
+```
+
+The same `backupModel` array can be used in Markdown agent frontmatter. Model IDs without a `#variant` remain supported.
 
 ### Agents
 
