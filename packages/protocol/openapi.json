@@ -13468,6 +13468,12 @@
           "model": {
             "$ref": "#/components/schemas/Model.Ref"
           },
+          "backupModel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Model.Ref"
+            }
+          },
           "request": {
             "$ref": "#/components/schemas/Provider.Request"
           },
@@ -13591,6 +13597,12 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "backupModel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Config.ModelSelectionEncoded"
+            }
           },
           "request": {
             "type": "object",
@@ -14321,6 +14333,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "Config.ModelSelectionEncoded": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string",
+                "pattern": "^[^/#]+$"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              },
+              "variant": {
+                "type": "string",
+                "pattern": "^[^#]+$"
+              }
+            },
+            "required": ["providerID", "model"],
+            "additionalProperties": false
+          }
+        ]
       },
       "Config.Patch": {
         "type": "object",

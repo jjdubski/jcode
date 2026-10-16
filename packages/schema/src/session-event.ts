@@ -88,6 +88,22 @@ export const ModelSelected = Event.durable({
 })
 export type ModelSelected = typeof ModelSelected.Type
 
+/**
+ * Records a runner-initiated switch to a backup model after the primary (or an
+ * earlier backup) failed. Unlike `session.model.selected`, this does not change
+ * the Session's saved model selection; it only informs the transcript.
+ */
+export const ModelFallback = Event.durable({
+  type: "session.model.fallback",
+  ...options,
+  schema: {
+    ...Base,
+    model: Model.Ref,
+    previous: Model.Ref.pipe(optional),
+  },
+})
+export type ModelFallback = typeof ModelFallback.Type
+
 export const Moved = Event.durable({
   type: "session.moved",
   ...options,
@@ -653,6 +669,7 @@ export const Definitions = Event.inventory(
   Created,
   AgentSelected,
   ModelSelected,
+  ModelFallback,
   Moved,
   Renamed,
   MetadataUpdated,

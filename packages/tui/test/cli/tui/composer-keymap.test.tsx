@@ -22,9 +22,9 @@ import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const sessions = {
   parent: session("parent", "Parent"),
-  "child-a": session("child-a", "First", "parent"),
-  "child-b": session("child-b", "Second", "parent"),
-  "child-c": session("child-c", "Third", "parent"),
+  "child-a": session("child-a", "First", "parent", { id: "sonnet", providerID: "anthropic" }),
+  "child-b": session("child-b", "Second", "parent", { id: "gpt-5", providerID: "openai" }),
+  "child-c": session("child-c", "Third", "parent", { id: "sonnet", providerID: "anthropic", variant: "high" }),
 }
 
 const state = await tmpdir()
@@ -50,6 +50,7 @@ async function renderComposer(
       return json({ data: { "child-a": { type: "running" }, "child-b": { type: "running" } } })
     const sessionID = url.pathname.match(/^\/api\/session\/([^/]+)$/)?.[1]
     if (sessionID && sessionID in sessions) return json({ data: sessions[sessionID as keyof typeof sessions] })
+    if (/^\/api\/session\/[^/]+\/message$/.test(url.pathname)) return json({ data: [], cursor: {} })
     const interruptID = url.pathname.match(/^\/api\/session\/([^/]+)\/interrupt$/)?.[1]
     if (interruptID && request.method === "POST") {
       interrupted.push(interruptID)
@@ -209,6 +210,21 @@ test("the inactive subagent filter only changes with its toggle", async () => {
   }
 })
 
+test("shows each subagent's effective model next to its status", async () => {
+  const composer = await renderComposer("subagents", {})
+  try {
+    expect(composer.app.captureCharFrame()).toContain("Running (anthropic/sonnet)")
+    expect(composer.app.captureCharFrame()).toContain("Running (openai/gpt-5)")
+
+    composer.app.mockInput.pressKey("a", { ctrl: true })
+    await composer.app.renderOnce()
+    expect(composer.app.captureCharFrame()).toContain("(anthropic/sonnet#high)")
+    expect(composer.app.captureCharFrame()).not.toContain("Running")
+  } finally {
+    composer.app.renderer.destroy()
+  }
+})
+
 test("disabled shell bindings have no component fallbacks", async () => {
   const composer = await renderComposer("shell", {
     "composer.shell.up": "none",
@@ -287,7 +303,7 @@ test("shell output respects a configured binding with a focused textarea", async
   }
 })
 
-function session(id: string, title: string, parentID?: string) {
+function session(id: string, title: string, parentID?: string, model?: { id: string; providerID: string; variant?: string }) {
   return {
     id,
     projectID: "proj_test",
@@ -298,6 +314,7 @@ function session(id: string, title: string, parentID?: string) {
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 0, updated: 0 },
     ...(parentID ? { parentID } : {}),
+    ...(model ? { model } : {}),
   }
 }
 

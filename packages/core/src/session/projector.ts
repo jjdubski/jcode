@@ -574,6 +574,7 @@ const layer = Layer.effectDiscard(
           .pipe(Effect.orDie)
       }),
     )
+    yield* bus.project(SessionEvent.ModelFallback, (event) => run(db, event))
     yield* bus.project(SessionEvent.Renamed, (event) =>
       db
         .update(SessionTable)

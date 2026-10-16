@@ -105,6 +105,7 @@ describe("public event manifest", () => {
         "session.created.1",
         "session.deleted.2",
         "session.agent.selected.1",
+        "session.model.fallback.1",
         "session.model.selected.1",
         "session.moved.1",
         "session.renamed.1",

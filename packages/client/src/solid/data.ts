@@ -727,6 +727,29 @@ export function createData(config: CreateDataInput) {
         )
         return
       }
+      case "session.model.fallback": {
+        // A backup switch informs the transcript without changing the saved model selection.
+        if (!store.session.message[event.data.sessionID]) return
+        message.insert(event.data.sessionID, {
+          id: messageIDFromEvent(event.id),
+          type: "model-switched",
+          model: event.data.model,
+          previous: event.data.previous,
+          time: { created: event.created },
+        })
+        refresh(() =>
+          api()
+            .session.message.get({ sessionID: event.data.sessionID, messageID: messageIDFromEvent(event.id) })
+            .then((item) => {
+              message.update(event.data.sessionID, (draft, index) => {
+                const position = index.get(item.id)
+                if (position === undefined) return message.append(draft, index, item)
+                draft[position] = item
+              })
+            }),
+        )
+        return
+      }
       case "session.renamed": {
         // Preserve the live title when it races the session's initial read.
         refresh(() => {

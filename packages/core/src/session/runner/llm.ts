@@ -383,6 +383,11 @@ const layer = Layer.effect(
             recoverContinuation = false
           }),
           Fallback: Effect.fnUntraced(function* (outcome) {
+            yield* bus.publish(SessionEvent.ModelFallback, {
+              sessionID,
+              model: outcome.model,
+              previous: loaded.model.ref,
+            })
             model = outcome.model
             retry = yield* SessionRunnerRetry.make(bus, sessionID, { fallback: true })
             recoverOverflow = true

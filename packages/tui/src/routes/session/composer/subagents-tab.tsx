@@ -68,6 +68,14 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   const selectedEntry = createMemo(() => entries()[store.selected])
 
+  // Prefetch each listed subagent's transcript so the row can show its effective model.
+  createEffect(() => {
+    if (!composer.active("subagents")) return
+    for (const entry of entries()) {
+      void data.session.message.sync(entry.sessionID).catch(() => {})
+    }
+  })
+
   createEffect(() => {
     const active = composer.active("subagents")
     if (!active) {
@@ -203,9 +211,14 @@ export function SubagentsTab(props: { sessionID: string }) {
           <For each={entries()}>
             {(entry, index) => {
               const active = createMemo(() => index() === store.selected)
-              const status = createMemo(() => {
-                if (entry.status === "running") return "Running"
-                return ""
+              const model = createMemo(() => {
+                const messages = data.session.message.list(entry.sessionID)
+                const assistant = messages.findLast((message) => message.type === "assistant")
+                return modelRefLabel(assistant?.model ?? data.session.get(entry.sessionID)?.model)
+              })
+              const suffix = createMemo(() => {
+                const status = entry.status === "running" ? "Running" : ""
+                return [status, model() ? `(${model()})` : ""].filter(Boolean).join(" ")
               })
               return (
                 <box
@@ -241,9 +254,9 @@ export function SubagentsTab(props: { sessionID: string }) {
                       {entry.agent}: {entry.title}
                     </text>
                   </box>
-                  <Show when={status()}>
+                  <Show when={suffix()}>
                     <text fg={active() ? theme.text.action.primary.focused : theme.text.muted} wrapMode="none">
-                      {status()}
+                      {suffix()}
                     </text>
                   </Show>
                 </box>
@@ -254,4 +267,9 @@ export function SubagentsTab(props: { sessionID: string }) {
       </scrollbox>
     </Show>
   )
+}
+
+function modelRefLabel(model: { providerID: string; id: string; variant?: string } | undefined) {
+  if (!model) return undefined
+  return `${model.providerID}/${model.id}${model.variant ? `#${model.variant}` : ""}`
 }

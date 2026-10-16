@@ -5431,6 +5431,28 @@ describe("SessionRunnerLLM", () => {
     },
   )
 
+  scenario("records a model-switched notice when a backup model takes over", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.backupModel = [Model.Ref.parse("fake/replacement")]
+      }),
+    )
+    const quota = new AIError({ reason: new QuotaExceededError({ message: "Usage exhausted" }) })
+    yield* s.llm.push(Stream.fail(quota), TestLLM.text("Recovered", "backup-answer"))
+    yield* s.runPrompt("Use backup model")
+
+    expect(yield* recordedEventTypes(sessionID)).toContain(Bus.versionedType(SessionEvent.ModelFallback.type, 1))
+    const switches = (yield* s.context).filter((message) => message.type === "model-switched")
+    expect(switches).toHaveLength(1)
+    expect(switches[0]).toMatchObject({
+      model: Model.Ref.parse("fake/replacement"),
+      previous: Model.Ref.parse("fake/fake-model"),
+    })
+    // A fallback informs the transcript without replacing the saved selection.
+    expect((yield* s.session.get(sessionID))?.model).toBeUndefined()
+  })
+
   scenario("retries a transient failure once before selecting a backup model", function* (s) {
     const agents = yield* Agent.Service
     yield* agents.transform((editor) =>

@@ -116,6 +116,17 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
             }),
           )
         }),
+      "session.model.fallback": (event) =>
+        adapter.appendMessage(
+          SessionMessage.ModelSelected.make({
+            id: SessionMessage.ID.fromEvent(event.id),
+            type: "model-switched",
+            metadata: event.metadata,
+            model: event.data.model,
+            previous: event.data.previous,
+            time: { created },
+          }),
+        ),
       "session.moved": (event) =>
         Effect.gen(function* () {
           yield* adapter.appendMessage(

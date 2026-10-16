@@ -970,6 +970,16 @@ export type SessionModelSelected = {
   data: { sessionID: SessionID; model: ModelRef; previous?: ModelRef }
 }
 
+export type SessionModelFallback = {
+  id: EventID
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.model.fallback"
+  durable: { aggregateID: string; seq: EventSeq; version: 1 }
+  location?: LocationRef
+  data: { sessionID: SessionID; model: ModelRef; previous?: ModelRef }
+}
+
 export type SessionMoved = {
   id: EventID
   created: number
@@ -2494,6 +2504,7 @@ export type SessionEventDurable =
   | SessionCreated
   | SessionAgentSelected
   | SessionModelSelected
+  | SessionModelFallback
   | SessionMoved
   | SessionRenamed
   | SessionMetadataUpdated
@@ -2557,6 +2568,7 @@ export type V2Event =
   | SessionCreated
   | SessionAgentSelected
   | SessionModelSelected
+  | SessionModelFallback
   | SessionMoved
   | SessionRenamed
   | SessionMetadataUpdated
