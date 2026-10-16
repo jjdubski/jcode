@@ -482,6 +482,67 @@ it.effect("normalizes repeated, reopened, and overlapping AI SDK fragment bounda
   }),
 )
 
+it.effect("strips inline <think> reasoning delimiters from AI SDK text", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () =>
+          streamModel([
+            { type: "text-start", id: "txt-0" },
+            // Opening and closing tags split across deltas, then a complete closing tag.
+            { type: "text-delta", id: "txt-0", delta: "Let me <thi" },
+            { type: "text-delta", id: "txt-0", delta: "nk>plan.</thi" },
+            { type: "text-delta", id: "txt-0", delta: "nk> The answer.</think>" },
+            { type: "text-end", id: "txt-0" },
+            { type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage },
+          ]),
+      }
+    })
+
+    const resolved = yield* aisdk.model(model("@ai-sdk/openai-compatible"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+      Effect.provide(client),
+    )
+
+    expect(
+      response.events
+        .filter(LLMEvent.is.textDelta)
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("Let me plan. The answer.")
+  }),
+)
+
+it.effect("flushes a trailing think-tag prefix when AI SDK text ends", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () =>
+          streamModel([
+            { type: "text-start", id: "txt-0" },
+            { type: "text-delta", id: "txt-0", delta: "Answer</thi" },
+            { type: "text-end", id: "txt-0" },
+            { type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage },
+          ]),
+      }
+    })
+
+    const resolved = yield* aisdk.model(model("@ai-sdk/openai-compatible"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+      Effect.provide(client),
+    )
+
+    expect(
+      response.events
+        .filter(LLMEvent.is.textDelta)
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("Answer</thi")
+  }),
+)
+
 it.effect("projects replay metadata onto AI SDK prompt parts", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

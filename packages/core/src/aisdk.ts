@@ -720,7 +720,7 @@ function metadataProviderOptions(input: ProviderMetadata | undefined): SharedV3P
 }
 
 function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallOptions, http?: HttpMiddleware) {
-  const state: StreamState = { step: 0, toolNames: {}, open: {} }
+  const state: StreamState = { step: 0, toolNames: {}, open: {}, textPending: "" }
   return Stream.concat(
     Stream.make(LLMEvent.stepStart({ index: state.step })),
     Stream.unwrap(
@@ -752,6 +752,29 @@ type StreamState = {
   step: number
   toolNames: Record<string, string>
   open: Partial<Record<Fragment, string>>
+  /** Buffered tail of the open text fragment that may begin a reasoning delimiter tag. */
+  textPending: string
+}
+
+// OpenAI-compatible reasoning models (e.g. OpenCode's `big-pickle`) sometimes
+// stream `<think>` / `</think>` delimiters inline in `content` instead of the
+// `reasoning_content` field. The AI SDK passes `content` through as plain text,
+// so strip the delimiters here to keep them out of visible assistant text.
+const THINK_TAGS = ["<think>", "</think>"] as const
+const MAX_THINK_TAG_LENGTH = Math.max(...THINK_TAGS.map((tag) => tag.length))
+
+function stripThinkTags(pending: string, delta: string): { text: string; pending: string } {
+  const combined = pending + delta
+  // Hold back the longest suffix that could complete into a tag on the next
+  // delta so a delimiter split across chunks is still removed in full.
+  const limit = Math.min(MAX_THINK_TAG_LENGTH - 1, combined.length)
+  const hold =
+    Array.from({ length: limit }, (_, index) => limit - index).find((length) =>
+      THINK_TAGS.some((tag) => tag.startsWith(combined.slice(-length))),
+    ) ?? 0
+  const remainder = hold > 0 ? combined.slice(0, -hold) : combined
+  const text = THINK_TAGS.reduce((value, tag) => value.split(tag).join(""), remainder)
+  return { text, pending: hold > 0 ? combined.slice(-hold) : "" }
 }
 
 function streamPartEvents(
@@ -767,18 +790,29 @@ function streamPartEvents(
     case "tool-approval-request":
       return Effect.succeed([])
     case "text-start":
+      state.textPending = ""
       return Effect.succeed(openFragment(state, "text", event.id, providerMetadata(event.providerMetadata)))
-    case "text-delta":
-      return Effect.succeed([
-        ...openFragment(state, "text", event.id),
-        LLMEvent.textDelta({
-          id: event.id,
-          text: event.delta,
-          providerMetadata: providerMetadata(event.providerMetadata),
-        }),
-      ])
-    case "text-end":
-      return Effect.succeed(closeFragment(state, "text", event.id, providerMetadata(event.providerMetadata)))
+    case "text-delta": {
+      const { text, pending } = stripThinkTags(state.textPending, event.delta)
+      state.textPending = pending
+      const events: LLMEvent[] = [...openFragment(state, "text", event.id)]
+      if (text)
+        events.push(
+          LLMEvent.textDelta({ id: event.id, text, providerMetadata: providerMetadata(event.providerMetadata) }),
+        )
+      return Effect.succeed(events)
+    }
+    case "text-end": {
+      const pending = state.textPending
+      state.textPending = ""
+      const events: LLMEvent[] = []
+      if (pending)
+        events.push(
+          LLMEvent.textDelta({ id: event.id, text: pending, providerMetadata: providerMetadata(event.providerMetadata) }),
+        )
+      events.push(...closeFragment(state, "text", event.id, providerMetadata(event.providerMetadata)))
+      return Effect.succeed(events)
+    }
     case "reasoning-start":
       return Effect.succeed(openFragment(state, "reasoning", event.id, providerMetadata(event.providerMetadata)))
     case "reasoning-delta":
