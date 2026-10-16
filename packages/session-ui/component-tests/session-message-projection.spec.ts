@@ -48,7 +48,7 @@ story("renders aliased and long custom model notices", async ({ mount, page }) =
 
   const long = timeline.locator('[data-slot="session-timeline-notice"]').filter({ hasText: longName })
   await expect(short).toBeVisible()
-  await expect(short.getByText(`Switched to ${shortName}`, { exact: true })).toBeVisible()
+  await expect(short.getByText(`Switched model to ${shortName}`, { exact: true })).toBeVisible()
   await expect(short.locator('[data-slot="session-timeline-notice-variant"]')).toHaveText("xhigh")
   await expect(timeline.getByText("fast-nano", { exact: true })).toHaveCount(0)
   await expect(short.locator('[data-component="provider-icon"]')).toBeVisible()
@@ -68,7 +68,7 @@ story("renders aliased and long custom model notices", async ({ mount, page }) =
   await expect(long).toBeVisible()
   await expect(long.locator('[data-component="provider-icon"]')).toBeVisible()
   await expect(long.locator('[data-slot="session-timeline-notice-variant"]')).toHaveCount(0)
-  await expect(long.locator("[title]")).toHaveAttribute("title", `Switched to ${longName}`)
+  await expect(long.locator("[title]")).toHaveAttribute("title", `Switched model to ${longName}`)
   await expect.poll(() => long.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
 })
 

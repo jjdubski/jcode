@@ -158,7 +158,7 @@ test("keeps the previous model in a live variant notice until the projected mess
   }
 })
 
-test("records a backup switch notice without changing the saved model", async () => {
+test("records a backup switch notice in an unloaded subagent transcript without changing the saved model", async () => {
   const projected = Promise.withResolvers<void>()
   const previous = { providerID: "provider", id: "model" }
   const model = { providerID: "provider", id: "replacement" }
@@ -201,8 +201,9 @@ test("records a backup switch notice without changing the saved model", async ()
   }))
 
   try {
-    setup.data.session.remember({ ...session(0), id: "ses_fallback", model: previous })
-    await setup.data.session.message.sync("ses_fallback")
+    setup.data.session.remember({ ...session(0), id: "ses_parent" })
+    setup.data.session.remember({ ...session(0), id: "ses_fallback", parentID: "ses_parent", model: previous })
+    // A child session can fall back while its transcript has not been opened or synced.
     const event: OpenCodeEvent = {
       id: "evt_fallback",
       created: 2,
@@ -216,6 +217,7 @@ test("records a backup switch notice without changing the saved model", async ()
       model,
       previous,
     })
+    expect(setup.data.session.message.get("ses_parent", "msg_fallback")).toBeUndefined()
     // The backup switch informs the transcript but preserves the saved selection.
     expect(setup.data.session.get("ses_fallback")?.model).toEqual(previous)
     projected.resolve()

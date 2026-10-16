@@ -729,7 +729,6 @@ export function createData(config: CreateDataInput) {
       }
       case "session.model.fallback": {
         // A backup switch informs the transcript without changing the saved model selection.
-        if (!store.session.message[event.data.sessionID]) return
         message.insert(event.data.sessionID, {
           id: messageIDFromEvent(event.id),
           type: "model-switched",
