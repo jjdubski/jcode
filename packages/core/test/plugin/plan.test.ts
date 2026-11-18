@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Message, ToolFailure } from "@opencode/ai"
+import { Message, ToolFailure } from "@opencode/ai/effect"
 import { DateTime, Effect, Option, Stream, Types } from "effect"
 import type { SessionContext } from "@opencode/plugin/effect/session"
 import type { ToolHooks } from "@opencode/plugin/effect/tool"
@@ -126,6 +126,7 @@ type ToolErrorEvent = Extract<ToolHooks["execute.after"], { readonly status: "er
 
 const toolError = (tool: "edit" | "write" | "patch", error: Tool.Error): ToolErrorEvent => ({
   tool,
+  codemode: false,
   input: {},
   sessionID,
   agent: plan,

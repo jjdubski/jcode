@@ -5,6 +5,8 @@ import {
   MouseEvent,
   PasteEvent,
   decodePasteBytes,
+  measureEditText,
+  stripAnsiSequences,
   type KeyEvent,
 } from "@opentui/core"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
@@ -25,13 +27,11 @@ import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
 import { useExit } from "../../context/exit"
-import { promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
-import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
-import { saveDraft, takeDraft } from "./draft-stash"
+import { registerComposer, saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@opencode/schema/skill"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
@@ -48,9 +48,9 @@ import { useConnected } from "../use-connected"
 import { useToast } from "../../ui/toast"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
-import { useConfig } from "../../config"
+import { useConfig, useCursorStyle, useNewDesigns } from "../../config"
 import { usePromptMove } from "./move"
-import { resolvePastedAttachments } from "./local-attachment"
+import { promptFilesForServer, resolvePastedAttachments } from "./local-attachment"
 import { locationKey, useData } from "../../context/data"
 import { useLocation } from "../../context/location"
 import { useArgs } from "../../context/args"
@@ -71,6 +71,7 @@ import { useWorkingDirectoryActions } from "../../ui/working-directory-actions"
 import { truncateFilePath } from "../../ui/file-path"
 import { PromptMetadataRow } from "./metadata"
 import { withDollarSkills } from "./skill"
+import { limitLabel, useUsageLimits } from "../usage"
 
 export type PromptProps = {
   sessionID?: string
@@ -207,16 +208,18 @@ export function Prompt(props: PromptProps) {
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
+  const cursorStyle = useCursorStyle()
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
-  const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
   const renderer = useRenderer()
+  const measure = (text: string) => measureEditText(text, { widthMethod: renderer.widthMethod })
   const exit = useExit()
   const dimensions = useTerminalDimensions()
   const theme = useTheme()
+  const newDesigns = useNewDesigns()
   const { currentSyntax: syntax } = useThemes()
   const animationsEnabled = createMemo(() => config.animations ?? true)
   const list = createMemo(() => props.placeholders?.normal ?? [])
@@ -343,7 +346,7 @@ export function Prompt(props: PromptProps) {
     setTimeout(() => {
       // setTimeout is a workaround and needs to be addressed properly
       if (!input || input.isDestroyed) return
-      input.getLayoutNode().markDirty()
+      input.invalidateIntrinsicSize()
       input.gotoBufferEnd()
       renderer.requestRender()
     }, 0)
@@ -352,7 +355,6 @@ export function Prompt(props: PromptProps) {
   createEffect(() => {
     if (!input || input.isDestroyed) return
     input.cursorColor = disabled() ? theme.background.raised.base : theme.text.base
-    if (config.cursor) input.cursorStyle = config.cursor
   })
 
   const [store, setStore] = createStore<{
@@ -368,6 +370,7 @@ export function Prompt(props: PromptProps) {
     extmarkToPart: new Map(),
     interrupt: 0,
   })
+  const history = usePromptHistory(() => ({ ...unwrap(store.prompt), mode: store.mode }))
   let disposed = false
   let pasteQueue = Promise.resolve()
 
@@ -554,7 +557,7 @@ export function Prompt(props: PromptProps) {
         run: async () => {
           dialog.clear()
 
-          const editorPrompt = expandPromptInputPastedText(store.prompt, store.prompt.pasted)
+          const editorPrompt = expandPromptInputPastedText(store.prompt, store.prompt.pasted, renderer.widthMethod)
           const value = editorPrompt.text
           const content = await openEditor({
             renderer,
@@ -563,6 +566,8 @@ export function Prompt(props: PromptProps) {
               (data.location.info()?.project.directory === "/" ? undefined : data.location.info()?.project.directory) ||
               data.location.default().directory ||
               paths.cwd,
+          }).catch((error) => {
+            toast.show({ title: "Failed to open editor", message: errorMessage(error), variant: "error" })
           })
           if (!content) return
           const normalized = normalizePromptContent(content)
@@ -571,13 +576,14 @@ export function Prompt(props: PromptProps) {
 
           setStore("prompt", {
             ...withDollarSkills(
-              realignPromptInputMentions(normalized, editorPrompt),
+              realignPromptInputMentions(normalized, editorPrompt, renderer.widthMethod),
               (data.location.skill.list(currentLocation.ref) ?? []).map((skill) => skill.id),
+              renderer.widthMethod,
             ),
             pasted: [],
           })
           restoreExtmarksFromPrompt(store.prompt)
-          input.cursorOffset = stringWidth(normalized)
+          input.cursorOffset = measure(normalized)
         },
       },
       {
@@ -593,10 +599,11 @@ export function Prompt(props: PromptProps) {
                 if (store.prompt.skills?.some((item) => item.id === skill)) return
                 const text = `@${skill}`
                 const start = input.cursorOffset
+                const end = start + measure(text)
                 input.insertText(text + " ")
                 const extmarkId = input.extmarks.create({
                   start,
-                  end: start + promptOffsetWidth(text),
+                  end,
                   virtual: true,
                   styleId: skillStyleId,
                   typeId: promptPartTypeId,
@@ -608,7 +615,7 @@ export function Prompt(props: PromptProps) {
                     const index = skills.length
                     skills.push({
                       id: Skill.ID.make(skill),
-                      mention: { start, end: start + promptOffsetWidth(text), text },
+                      mention: { start, end, text },
                     })
                     draft.extmarkToPart.set(extmarkId, { type: "skill", index })
                   }),
@@ -690,6 +697,7 @@ export function Prompt(props: PromptProps) {
       setStore("mode", mode)
     },
     set(prompt) {
+      history.reset()
       input.setText(prompt.text)
       setStore("prompt", prompt)
       restoreExtmarksFromPrompt(prompt)
@@ -704,6 +712,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function resetComposer() {
+    history.reset()
     input.extmarks.clear()
     setStore("prompt", emptyPrompt())
     setStore("extmarkToPart", new Map())
@@ -716,13 +725,14 @@ export function Prompt(props: PromptProps) {
   const stashSessionID = props.sessionID
 
   onMount(() => {
+    onCleanup(registerComposer(stashSessionID, ref))
     const saved = takeDraft(stashSessionID)
     if (store.prompt.text) return
     if (saved && saved.prompt.text) {
       input.setText(saved.prompt.text)
       setStore("prompt", saved.prompt)
       restoreExtmarksFromPrompt(saved.prompt)
-      input.cursorOffset = saved.cursor
+      input.cursorOffset = Math.min(saved.cursor, measure(saved.prompt.text))
     }
   })
 
@@ -795,6 +805,7 @@ export function Prompt(props: PromptProps) {
           virtual: true,
           styleId,
           typeId: promptPartTypeId,
+          data: ref.type === "pasted" ? { pasted: prompt.pasted[ref.index].text, label: mention.text } : undefined,
         })
         setStore("extmarkToPart", (map: Map<number, PromptPartRef>) => {
           const newMap = new Map(map)
@@ -817,6 +828,19 @@ export function Prompt(props: PromptProps) {
         const pasted: PromptInfo["pasted"] = []
 
         for (const extmark of allExtmarks) {
+          // Undo restores the extmark after its entry in the live prompt has been removed.
+          if (typeof extmark.data?.pasted === "string" && typeof extmark.data?.label === "string") {
+            if (input.getTextRange(extmark.start, extmark.end) !== extmark.data.label) {
+              input.extmarks.delete(extmark.id)
+              continue
+            }
+            newMap.set(extmark.id, { type: "pasted", index: pasted.length })
+            pasted.push({
+              text: extmark.data.pasted,
+              source: { start: extmark.start, end: extmark.end, text: extmark.data.label },
+            })
+            continue
+          }
           const ref = draft.extmarkToPart.get(extmark.id)
           if (!ref) continue
           if (ref.type === "file") {
@@ -846,15 +870,7 @@ export function Prompt(props: PromptProps) {
             const index = skills.length
             skills.push(part)
             newMap.set(extmark.id, { type: "skill", index })
-            continue
           }
-          const part = draft.prompt.pasted[ref.index]
-          if (!part) continue
-          part.source.start = extmark.start
-          part.source.end = extmark.end
-          const index = pasted.length
-          pasted.push(part)
-          newMap.set(extmark.id, { type: "pasted", index })
         }
 
         const nextFiles = preserveMentionlessPromptAttachments(draft.prompt.files, files)
@@ -898,12 +914,7 @@ export function Prompt(props: PromptProps) {
         enabled: stash.list().length > 0,
         run: () => {
           const entry = stash.pop()
-          if (entry) {
-            input.setText(entry.prompt.text)
-            setStore("prompt", entry.prompt)
-            restoreExtmarksFromPrompt(entry.prompt)
-            input.gotoBufferEnd()
-          }
+          if (entry) ref.set(entry.prompt)
           dialog.clear()
         },
       },
@@ -913,16 +924,7 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         enabled: stash.list().length > 0,
         run: () => {
-          dialog.replace(() => (
-            <DialogStash
-              onSelect={(entry) => {
-                input.setText(entry.prompt.text)
-                setStore("prompt", entry.prompt)
-                restoreExtmarksFromPrompt(entry.prompt)
-                input.gotoBufferEnd()
-              }}
-            />
-          ))
+          dialog.replace(() => <DialogStash onSelect={(entry) => ref.set(entry.prompt)} />)
         },
       },
     ].map(
@@ -1067,12 +1069,13 @@ export function Prompt(props: PromptProps) {
           title: "Next prompt history",
           group: "Prompt",
           run() {
-            if (input.cursorOffset !== input.plainText.length) {
+            const end = measure(input.plainText)
+            if (input.cursorOffset !== end) {
               if (
                 input.scrollY + input.visualCursor.visualRow ===
                 Math.max(0, input.editorView.getTotalVirtualLineCount() - 1)
               ) {
-                input.cursorOffset = input.plainText.length
+                input.cursorOffset = end
                 return
               }
               input.moveCursorDown()
@@ -1085,7 +1088,7 @@ export function Prompt(props: PromptProps) {
             setStore("prompt", item)
             setStore("mode", item.mode ?? "normal")
             restoreExtmarksFromPrompt(item)
-            input.cursorOffset = input.plainText.length
+            input.cursorOffset = measure(item.text)
           },
         },
       ],
@@ -1133,6 +1136,7 @@ export function Prompt(props: PromptProps) {
         if (!part) return []
         return [{ start: extmark.start, end: extmark.end, text: part.text }]
       }),
+      renderer.widthMethod,
     )
     const slash = argumentSlash(inputText, keymapCommands())
     if (delivery === "queue" && (store.mode === "shell" || exitWord || slash)) {
@@ -1183,10 +1187,15 @@ export function Prompt(props: PromptProps) {
     // snapshot unless the user has started typing something new.
     const currentMode = store.mode
     const skillIDs = (data.location.skill.list(currentLocation.ref) ?? []).map((skill) => skill.id)
-    const entry = withDollarSkills({ ...store.prompt, mode: currentMode }, currentMode === "shell" ? [] : skillIDs)
-    const submitted = withDollarSkills(
-      expandPromptInputPastedText(entry, entry.pasted),
+    const entry = withDollarSkills(
+      { ...store.prompt, mode: currentMode },
       currentMode === "shell" ? [] : skillIDs,
+      renderer.widthMethod,
+    )
+    const submitted = withDollarSkills(
+      expandPromptInputPastedText(entry, entry.pasted, renderer.widthMethod),
+      currentMode === "shell" ? [] : skillIDs,
+      renderer.widthMethod,
     )
     if (trimmed) {
       resetComposer()
@@ -1198,7 +1207,7 @@ export function Prompt(props: PromptProps) {
       setStore("prompt", entry)
       setStore("mode", entry.mode ?? "normal")
       restoreExtmarksFromPrompt(entry)
-      input.cursorOffset = entry.text.length
+      input.cursorOffset = measure(entry.text)
     }
     const fail = (title: string, error: unknown) => {
       toast.show({ title, message: errorMessage(error), variant: "error" })
@@ -1266,8 +1275,8 @@ export function Prompt(props: PromptProps) {
             route.data.type === "session" && route.data.sessionID === created.id ? promptRef.current : undefined
           const current = active?.current
           const draft = current?.text
-            ? { prompt: { ...unwrap(current) }, cursor: current.text.length }
-            : (takeDraft(created.id) ?? { prompt: entry, cursor: entry.text.length })
+            ? { prompt: { ...unwrap(current) }, cursor: Infinity }
+            : (takeDraft(created.id) ?? { prompt: entry, cursor: Infinity })
           saveDraft(undefined, draft)
           active?.reset()
           if (sessionTabs.enabled()) {
@@ -1314,7 +1323,9 @@ export function Prompt(props: PromptProps) {
     if (currentMode === "shell") {
       move.startSubmit()
       const send = () => client.api.session.shell({ sessionID: target, command: inputText })
-      void (newSession ? newSession.gate.then(send).catch(newSession.recover) : send())
+      void (newSession ? newSession.gate.then(send) : send()).catch((error) =>
+        newSession ? newSession.recover(error) : fail("Failed to run shell command", error),
+      )
       setStore("mode", "normal")
     } else if (slashHead && isCommand) {
       const send = async () => {
@@ -1325,7 +1336,7 @@ export function Prompt(props: PromptProps) {
           sessionID: target,
           name: slashHead.name,
           text: slashHead.arguments,
-          files: entry.files,
+          files: promptFilesForServer(entry.files, terminalEnvironment.localServer === true),
           agents: entry.agents,
           skills: submitted.skills.length ? submitted.skills : undefined,
           delivery,
@@ -1366,7 +1377,7 @@ export function Prompt(props: PromptProps) {
         .prompt({
           sessionID: target,
           text: inputText,
-          files: entry.files,
+          files: promptFilesForServer(entry.files, terminalEnvironment.localServer === true),
           agents: entry.agents,
           skills: submitted.skills.length ? submitted.skills : undefined,
           delivery,
@@ -1406,7 +1417,7 @@ export function Prompt(props: PromptProps) {
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
-    const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
+    const extmarkEnd = extmarkStart + measure(virtualText)
 
     input.insertText(virtualText + " ")
 
@@ -1416,6 +1427,7 @@ export function Prompt(props: PromptProps) {
       virtual: true,
       styleId: pasteStyleId,
       typeId: promptPartTypeId,
+      data: { pasted: text, label: virtualText },
     })
 
     setStore(
@@ -1437,14 +1449,13 @@ export function Prompt(props: PromptProps) {
     const part = store.prompt.pasted[ref.index]
     if (!part) return false
 
-    input.extmarks.delete(extmarkId)
     input.setSelection(extmark.start, extmark.end)
     input.insertText(part.text)
     return true
   }
 
   async function pasteInputText(text: string, changed: () => boolean) {
-    const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    const normalizedText = stripAnsiSequences(text).replace(/\r\n?/g, "\n")
     const pastedContent = normalizedText.trim()
     const attachments = await resolvePastedAttachments(pastedContent, terminalEnvironment.platform)
     if (changed()) return
@@ -1480,18 +1491,19 @@ export function Prompt(props: PromptProps) {
     const next = withDollarSkills(
       { ...store.prompt, text: input.plainText },
       (data.location.skill.list(currentLocation.ref) ?? []).map((skill) => skill.id),
+      renderer.widthMethod,
     )
     setStore("prompt", next)
     restoreExtmarksFromPrompt(next)
 
     setTimeout(() => {
       if (!input || input.isDestroyed) return
-      input.getLayoutNode().markDirty()
+      input.invalidateIntrinsicSize()
       renderer.requestRender()
     }, 0)
   }
 
-  function pasteAttachment(file: { filename?: string; uri: string }) {
+  function pasteAttachment(file: { filename?: string; uri: string; path?: string }) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
     const virtualText = promptAttachmentLabel(store.prompt.files, { uri: file.uri, name: file.filename })
@@ -1511,6 +1523,7 @@ export function Prompt(props: PromptProps) {
     const part: NonNullable<PromptInfo["files"]>[number] = {
       uri: file.uri,
       name: file.filename,
+      path: file.path,
       mention: {
         start: extmarkStart,
         end: extmarkEnd,
@@ -1579,9 +1592,25 @@ export function Prompt(props: PromptProps) {
       variant: undefined,
     },
   )
+  // What the workspace's limits leave for the selected model, once it is running low. Only OpenCode Console limits
+  // models, so only a model it serves loads them.
+  const limits = useUsageLimits()
+  createEffect(() => {
+    const selected = local.model.current()
+    if (selected && limits.served(selected.providerID) && limits.info() === undefined) limits.load()
+  })
+  const limit = createMemo(() => {
+    const selected = local.model.current()
+    const model = limits
+      .models()
+      .find((item) => item.providerID === selected?.providerID && item.id === selected?.modelID)
+    return model ? limitLabel(limits.usage(model), model) : undefined
+  })
   const highlight = createMemo(() => {
     if (muted()) return theme.border.base
-    if (store.mode === "shell") return theme.text.action.primary.selected
+    if (store.mode === "shell")
+      // The new designs' interactive color matches the first agent's, so shell takes the second categorical color.
+      return newDesigns() ? (theme.categorical[1] ?? theme.categorical[0])[400] : theme.text.action.primary.selected
     return promptDisplay().agentColor ?? theme.border.base
   })
   const agentLabel = createMemo(() => (store.mode === "shell" ? "Shell" : promptDisplay().agentLabel))
@@ -1766,7 +1795,7 @@ export function Prompt(props: PromptProps) {
               focusedTextColor={muted() ? theme.text.muted : theme.text.base}
               minHeight={1}
               maxHeight={maxHeight()}
-              cursorStyle={config.cursor}
+              cursorStyle={cursorStyle()}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "text", value)
@@ -1814,7 +1843,18 @@ export function Prompt(props: PromptProps) {
               ref={(r: TextareaRenderable) => {
                 input = r
                 Object.assign(r, {
-                  getClipboardText: (text: string) => expandPastedTextPlaceholders(text, store.prompt.pasted),
+                  getClipboardText: (text: string) => {
+                    const range = r.getSelection()
+                    // A selection spanning other renderables is not indexed relative to this textarea.
+                    if (!range || text !== r.getSelectedText()) {
+                      return expandPastedTextPlaceholders(text, store.prompt.pasted)
+                    }
+                    const parts = store.prompt.pasted.flatMap(({ source, text }) => {
+                      if (source.start < range.start || source.end > range.end) return []
+                      return [{ start: source.start - range.start, end: source.end - range.start, text }]
+                    })
+                    return expandTrackedPastedText(text, parts, renderer.widthMethod)
+                  },
                 })
                 setInputTarget(r)
                 if (promptPartTypeId === 0) {
@@ -1825,7 +1865,6 @@ export function Prompt(props: PromptProps) {
                   // setTimeout is a workaround and needs to be addressed properly
                   if (!input || input.isDestroyed) return
                   input.cursorColor = disabled() ? theme.background.raised.base : theme.text.base
-                  if (config.cursor) input.cursorStyle = config.cursor
                 }, 0)
               }}
               onMouseDown={(r: MouseEvent) => {
@@ -1854,6 +1893,7 @@ export function Prompt(props: PromptProps) {
                 model={promptDisplay().modelLabel}
                 provider={promptDisplay().providerLabel}
                 variant={promptDisplay().variant}
+                limit={limit()}
                 muted={!!muted()}
                 highlight={highlight()}
                 agentAlpha={agentMetaAlpha()}

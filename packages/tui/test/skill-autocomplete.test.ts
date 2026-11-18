@@ -1,6 +1,21 @@
-import { expect, test } from "bun:test"
+import { beforeEach, expect, test } from "bun:test"
+import { takeDraft } from "../src/component/prompt/draft-stash"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
+
+// The draft stash is process-global: an earlier app test can leave a home draft that this prompt
+// restores, which would put the typed trigger after other text and keep the popup closed.
+beforeEach(() => takeDraft(undefined))
+
+// The popup's options arrive from the skill read, not from a render, so a frame budget can run out on a
+// loaded runner while the request is still in flight. Poll the captured frame on a wall-clock deadline.
+async function waitForText(setup: Awaited<ReturnType<typeof createAppFixture>>, matches: (frame: string) => boolean) {
+  const started = Date.now()
+  while (!matches(setup.captureCharFrame())) {
+    if (Date.now() - started > 2_000) throw new Error("Timed out waiting for the skill popup")
+    await Bun.sleep(10)
+  }
+}
 
 test.each(["$", "@"])("%s skill autocomplete sorts skills and retains the selected prefix", async (prefix) => {
   await using setup = await createAppFixture({
@@ -23,7 +38,7 @@ test.each(["$", "@"])("%s skill autocomplete sorts skills and retains the select
   await setup.ready
   await setup.waitForFrame((frame) => frame.includes("commands"))
   await setup.mockInput.typeText(prefix)
-  await setup.waitForFrame((frame) => frame.includes("zulu skill detail"))
+  await waitForText(setup, (frame) => frame.includes("zulu skill detail"))
   const frame = setup.captureCharFrame()
   expect(frame.indexOf("alpha skill detail")).toBeLessThan(frame.indexOf("zulu skill detail"))
   setup.mockInput.pressEnter()
@@ -48,7 +63,7 @@ test("environment variables dismiss dollar autocomplete without invoking skills"
   await setup.ready
   await setup.waitForFrame((frame) => frame.includes("commands"))
   await setup.mockInput.typeText("$")
-  await setup.waitForFrame((frame) => frame.includes("not a variable popup"))
+  await waitForText(setup, (frame) => frame.includes("not a variable popup"))
   await setup.mockInput.typeText("HOME")
   await setup.waitForFrame((frame) => frame.includes("$HOME") && !frame.includes("not a variable popup"))
   setup.mockInput.pressKey("u", { ctrl: true })
@@ -98,7 +113,7 @@ test.each(["$", "@"])("selected %s skills submit using current semantic attachme
   await setup.ready
   await setup.waitForFrame((frame) => frame.includes("Skill fixture") && frame.includes("Model"))
   await setup.mockInput.typeText(prefix)
-  await setup.waitForFrame((frame) => frame.includes("review skill detail"))
+  await waitForText(setup, (frame) => frame.includes("review skill detail"))
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes(`${prefix}review`) && !frame.includes("review skill detail"))
   setup.mockInput.pressEnter()

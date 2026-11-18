@@ -21,8 +21,9 @@ export function parseOption(content: string) {
   }
 }
 
-// Other coding agents accept unquoted colons in frontmatter values. Retry
-// those values as YAML block scalars so existing config files keep working.
+// Other coding agents accept unquoted colons and leading tags like `[Tag] text`
+// in frontmatter values. Retry those values as YAML block scalars so existing
+// config files keep working.
 export function sanitize(content: string) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return content
@@ -35,7 +36,7 @@ export function sanitize(content: string) {
     if (value === "" || value === ">" || value === "|" || value.startsWith('"') || value.startsWith("'")) return [line]
     // Quote unquoted hex color codes so YAML doesn't treat # as a comment
     if (/^#[0-9a-fA-F]{6}$/.test(value)) return [`${entry[1]}: "${value}"`]
-    if (!value.includes(":")) return [line]
+    if (!value.includes(":") && !/^[[{].*[\]}]\s*\S/.test(value)) return [line]
     return [`${entry[1]}: |-`, `  ${value}`]
   })
   return content.replace(frontmatter, () => result.join("\n"))

@@ -7,15 +7,15 @@ import { projectedPromptInput } from "../../src/prompt/codec"
 
 describe("dollar skills", () => {
   test("opens only at token boundaries and uses textarea offsets", () => {
-    expect(skillTriggerIndex("$")).toBe(0)
-    expect(skillTriggerIndex("日本\n$code-review")).toBe(5)
-    expect(skillTriggerIndex("$code next")).toBeUndefined()
-    expect(skillTriggerIndex("cost$code")).toBeUndefined()
-    expect(skillTriggerIndex("\\$code")).toBeUndefined()
-    expect(skillTriggerIndex("$HOME")).toBeUndefined()
-    expect(skillTriggerIndex("${HOME}")).toBeUndefined()
-    expect(skillTriggerIndex("$_TOKEN")).toBeUndefined()
-    expect(skillTriggerIndex("$HOME/path")).toBeUndefined()
+    expect(skillTriggerIndex("$", "unicode")).toBe(0)
+    expect(skillTriggerIndex("日本\n$code-review", "unicode")).toBe(5)
+    expect(skillTriggerIndex("$code next", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("cost$code", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("\\$code", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("$HOME", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("${HOME}", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("$_TOKEN", "unicode")).toBeUndefined()
+    expect(skillTriggerIndex("$HOME/path", "unicode")).toBeUndefined()
   })
 
   test("recognizes bounded names without treating environment variables as skills", () => {
@@ -24,7 +24,7 @@ describe("dollar skills", () => {
       "test",
       "code",
     ])
-    expect(withDollarSkills({ text: "$HOME $unknown $review" }, ["HOME", "review"]).skills).toEqual([
+    expect(withDollarSkills({ text: "$HOME $unknown $review" }, ["HOME", "review"], "unicode").skills).toEqual([
       { id: Skill.ID.make("review"), mention: { start: 15, end: 22, text: "$review" } },
     ])
   })
@@ -37,7 +37,7 @@ describe("dollar skills", () => {
       agents: [{ name: "build" }],
       files: [{ uri: "file:///project/a.ts" }],
     }
-    const result = withDollarSkills(input, ["review", "test"])
+    const result = withDollarSkills(input, ["review", "test"], "unicode")
     expect(result.skills).toEqual([
       input.skills[0],
       { id: Skill.ID.make("test"), mention: { start: 16, end: 21, text: "$test" } },
@@ -48,13 +48,13 @@ describe("dollar skills", () => {
   })
 
   test("round-trips semantic mentions through history, external editing and projected messages", () => {
-    const prompt = withDollarSkills({ ...emptyPrompt(), text: "日本\n$review" }, ["review"])
+    const prompt = withDollarSkills({ ...emptyPrompt(), text: "日本\n$review" }, ["review"], "unicode")
     expect(prompt.skills[0]?.mention).toEqual({ start: 5, end: 12, text: "$review" })
     const restored = parsePromptHistory(JSON.stringify(prompt))[0]!
-    const edited = realignPromptInputMentions("prefix 日本\n$review", restored)
+    const edited = realignPromptInputMentions("prefix 日本\n$review", restored, "unicode")
     expect(edited.skills?.[0]?.mention).toEqual({ start: 12, end: 19, text: "$review" })
     expect(projectedPromptInput({ text: edited.text, skills: edited.skills }).skills).toEqual(edited.skills)
-    expect(realignPromptInputMentions("removed", edited).skills).toEqual([])
+    expect(realignPromptInputMentions("removed", edited, "unicode").skills).toEqual([])
   })
 
   test("resolves skills in expanded multiline pastes before submitting", () => {
@@ -64,7 +64,7 @@ describe("dollar skills", () => {
       skills: [{ id: Skill.ID.make("test"), mention: { start: 14, end: 19, text: "$test" } }],
       pasted: [{ text: "use\n$review", source: { start: 5, end: 13, text: "[Pasted]" } }],
     }
-    const submitted = withDollarSkills(expandPromptInputPastedText(prompt, prompt.pasted), ["review", "test"])
+    const submitted = withDollarSkills(expandPromptInputPastedText(prompt, prompt.pasted, "unicode"), ["review", "test"], "unicode")
     expect(submitted.text).toBe("日本 use\n$review $test")
     expect(submitted.skills).toEqual([
       { id: Skill.ID.make("test"), mention: { start: 17, end: 22, text: "$test" } },

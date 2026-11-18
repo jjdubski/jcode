@@ -8,7 +8,7 @@
 
 <p align="center">An open source AI coding agent (forked from opencode with some customizations).</p>
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+[![OpenCode Terminal UI](services/site/public/v1/docs/assets/lander/screenshot.png)](https://opencode.ai)
 
 ---
 

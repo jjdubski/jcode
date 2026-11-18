@@ -11,14 +11,7 @@ import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
 import { ShellResult } from "../shell/result.js"
 import type { Skill } from "../skill.js"
-import {
-  BusyError,
-  CompactionConflictError,
-  InboxConflictError,
-  NotFoundError,
-  PromptConflictError,
-  SyntheticConflictError,
-} from "./error.js"
+import { BusyError, CompactionConflictError, InboxConflictError, NotFoundError, PromptConflictError } from "./error.js"
 import { SessionEvent } from "./event.js"
 import { SessionExecution } from "./execution.js"
 import { SessionInbox } from "./inbox.js"
@@ -29,6 +22,7 @@ import { SessionShell } from "./shell.js"
 import { SessionSkill } from "./skill.js"
 import { SessionSchema } from "./schema.js"
 import { SessionStore } from "./store.js"
+import { SessionSynthetic } from "./synthetic.js"
 
 type PromptRequest = SessionPrompt.Input & {
   id?: SessionMessage.ID
@@ -71,6 +65,16 @@ export const make = Effect.fn("Session.make")(function* () {
   const rename = Effect.fn("Session.rename")(function* (sessionID: SessionSchema.ID, input: { title: string }) {
     yield* get(sessionID)
     yield* bus.publish(SessionEvent.Renamed, { sessionID, title: input.title })
+  })
+  const archive = Effect.fn("Session.archive")(function* (sessionID: SessionSchema.ID) {
+    const session = yield* get(sessionID)
+    if (session.time.archived) return
+    yield* bus.publish(SessionEvent.Archived, { sessionID })
+  })
+  const unarchive = Effect.fn("Session.unarchive")(function* (sessionID: SessionSchema.ID) {
+    const session = yield* get(sessionID)
+    if (!session.time.archived) return
+    yield* bus.publish(SessionEvent.Unarchived, { sessionID })
   })
   const setMetadata = Effect.fn("Session.setMetadata")(function* (
     sessionID: SessionSchema.ID,
@@ -142,39 +146,45 @@ export const make = Effect.fn("Session.make")(function* () {
     (sessionID: SessionSchema.ID, inboxID: SessionMessage.ID) => mutatePending(sessionID, inboxID, admission.queue),
     Effect.uninterruptible,
   )
-  const prompt = Effect.fn("Session.prompt")((sessionID: SessionSchema.ID, input: PromptRequest) =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const session = yield* get(sessionID)
-        const messageID = input.id ?? SessionMessage.ID.create()
-        const admitted = yield* Effect.gen(function* () {
-          const existing = yield* admission.reconcile({
-            id: messageID,
-            sessionID: session.id,
-            type: "user",
-            delivery: input.delivery ?? "steer",
-          })
-          if (existing) return existing
-          const item = yield* restore(
-            SessionPrompt.prepare({ session, messageID, input }).pipe(
-              Effect.provideService(Instance.Service, instances),
+  const prompt = Effect.fn("Session.prompt")(
+    (sessionID: SessionSchema.ID, input: PromptRequest, onAccepted?: Effect.Effect<void>) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const session = yield* get(sessionID)
+          const messageID = input.id ?? SessionMessage.ID.create()
+          const admitted = yield* Effect.gen(function* () {
+            const existing = yield* admission.reconcile({
+              id: messageID,
+              sessionID: session.id,
+              type: "user",
+              delivery: input.delivery ?? "steer",
+            })
+            if (existing) return existing
+            // Preparation, the staged revert commit and admission share one acquisition of the session's location
+            // services, so projections see its config whoever called prompt.
+            return yield* Effect.gen(function* () {
+              const item = yield* restore(SessionPrompt.prepare({ session, messageID, input }))
+              // Commit a staged revert only after preparation succeeds, before admitting new work.
+              if (session.revert) yield* SessionRevert.commit(bus, session)
+              return yield* admission.admit({
+                id: messageID,
+                sessionID: session.id,
+                item,
+              })
+            }).pipe(
+              instances.provide(session),
+              Effect.provideService(Database.Service, database),
               Effect.provideService(FSUtil.Service, fs),
-            ),
+            )
+          }).pipe(
+            Effect.catchTag("SessionInbox.LifecycleConflict", () => new PromptConflictError({ sessionID, messageID })),
           )
-          // Commit a staged revert only after preparation succeeds, before admitting new work.
-          if (session.revert) yield* SessionRevert.commit(bus, session)
-          return yield* admission.admit({
-            id: messageID,
-            sessionID: session.id,
-            item,
-          })
-        }).pipe(
-          Effect.catchTag("SessionInbox.LifecycleConflict", () => new PromptConflictError({ sessionID, messageID })),
-        )
-        if (input.resume !== false) yield* execution.wake(sessionID)
-        return admitted
-      }),
-    ),
+          if (input.resume !== false) yield* execution.wake(sessionID)
+          // Checkpoint an accepted handoff before observing cancellation. Prompt preparation above stays interruptible.
+          if (onAccepted) yield* onAccepted
+          return admitted
+        }),
+      ),
   )
   const shell = Effect.fn("Session.shell")(function* (
     sessionID: SessionSchema.ID,
@@ -270,48 +280,9 @@ export const make = Effect.fn("Session.make")(function* () {
     yield* get(sessionID)
     yield* execution.resume(sessionID)
   })
-  const synthetic = Effect.fn("Session.synthetic")(
-    (
-      sessionID: SessionSchema.ID,
-      input: {
-        id?: SessionMessage.ID
-        text: string
-        description?: string
-        metadata?: Record<string, unknown>
-        delivery?: SessionInbox.Delivery
-        resume?: boolean
-      },
-    ) =>
-      Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* get(sessionID)
-          const inputID = input.id ?? SessionMessage.ID.create()
-          const admittedInput = {
-            type: "synthetic",
-            payload: SessionInbox.SyntheticPayload.make({
-              text: input.text,
-              description: input.description,
-              metadata: input.metadata,
-            }),
-            delivery: SessionInbox.Delivery.make(input.delivery ?? "steer"),
-          } satisfies SessionInbox.Item
-          const admitted = yield* admission
-            .admit({
-              id: inputID,
-              sessionID,
-              item: admittedInput,
-            })
-            .pipe(
-              Effect.catchTag(
-                "SessionInbox.LifecycleConflict",
-                () => new SyntheticConflictError({ sessionID, inputID }),
-              ),
-            )
-          if (input.resume !== false && !(yield* get(sessionID)).revert) yield* execution.wake(sessionID)
-          return admitted
-        }),
-      ),
-  )
+  const admitSynthetic = SessionSynthetic.make(store, admission, execution.wake)
+  const synthetic = (sessionID: SessionSchema.ID, input: Omit<Parameters<typeof admitSynthetic>[0], "sessionID">) =>
+    admitSynthetic({ ...input, sessionID })
   const interrupt = Effect.fn("Session.interrupt")(
     (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) =>
       Effect.uninterruptible(execution.interrupt(sessionID, options)),
@@ -348,6 +319,8 @@ export const make = Effect.fn("Session.make")(function* () {
     message,
     view,
     rename,
+    archive,
+    unarchive,
     setMetadata,
     setPermissions,
     switchAgent,
@@ -372,6 +345,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const message = operations.message.bind(undefined, sessionID)
     const view = operations.view.bind(undefined, sessionID)
     const rename = operations.rename.bind(undefined, sessionID)
+    const archive = operations.archive.bind(undefined, sessionID)
+    const unarchive = operations.unarchive.bind(undefined, sessionID)
     const setMetadata = operations.setMetadata.bind(undefined, sessionID)
     const setPermissions = operations.setPermissions.bind(undefined, sessionID)
     const switchAgent = operations.switchAgent.bind(undefined, sessionID)
@@ -399,6 +374,8 @@ export const make = Effect.fn("Session.make")(function* () {
       message,
       view,
       rename,
+      archive,
+      unarchive,
       setMetadata,
       setPermissions,
       switchAgent,

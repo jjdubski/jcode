@@ -1,24 +1,33 @@
+import { measureEditText, type WidthMethod } from "@opentui/core"
 import type { PromptInput } from "@opencode/schema"
 import { Skill } from "@opencode/schema/skill"
-import { displaySlice, mentionTriggerIndex, promptOffsetWidth } from "../../prompt/display"
 
-export function skillTriggerIndex(text: string, offset = promptOffsetWidth(text)) {
-  const index = mentionTriggerIndex(text, offset, "$")
-  if (index === undefined) return
-  const query = displaySlice(text, index + 1, offset)
+/** Where the `$` that starts a skill invocation sits in the editor, or undefined when `text` has none. */
+export function skillTriggerIndex(text: string, widthMethod: WidthMethod) {
+  const index = text.lastIndexOf("$")
+  if (index === -1) return
+  const before = index === 0 ? undefined : text[index - 1]
+  const query = text.slice(index + 1)
+  // A `$` inside a word or after a backslash is escaped, and one followed by whitespace is literal text.
+  if (before !== undefined && !/\s/.test(before)) return
+  if (/\s/.test(query)) return
   // Shell variables are not skill invocations, even when a similarly named skill exists.
   if (query && (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(query) || /^[A-Z_][A-Z0-9_]*$/.test(query))) return
-  return index
+  return measureEditText(text.slice(0, index), { widthMethod })
 }
 
-export function withDollarSkills<T extends PromptInput.Prompt>(input: T, ids: readonly string[]) {
+export function withDollarSkills<T extends PromptInput.Prompt>(
+  input: T,
+  ids: readonly string[],
+  widthMethod: WidthMethod,
+) {
   const skills = [...(input.skills ?? [])]
   for (const ref of references(input.text)) {
     if (!ids.includes(ref.name) || skills.some((skill) => skill.id === ref.name)) continue
-    const start = promptOffsetWidth(input.text.slice(0, ref.start))
+    const start = measureEditText(input.text.slice(0, ref.start), { widthMethod })
     skills.push({
       id: Skill.ID.make(ref.name),
-      mention: { start, end: start + promptOffsetWidth(ref.value), text: ref.value },
+      mention: { start, end: start + measureEditText(ref.value, { widthMethod }), text: ref.value },
     })
   }
   return { ...input, skills }
